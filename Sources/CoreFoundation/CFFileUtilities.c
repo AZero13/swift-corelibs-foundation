@@ -455,15 +455,20 @@ CF_PRIVATE CFMutableArrayRef _CFCreateContentsOfDirectory(CFAllocatorRef alloc, 
 #endif
             Boolean isDir = (dp->d_type == DT_DIR);
             if (!isDir) {
-                // Ugh; must stat.
-                char subdirPath[CFMaxPathLength];
                 struct statinfo statBuf;
-                cf_strlcpy(subdirPath, dirPath, sizeof(subdirPath));
-                cf_strlcat(subdirPath, "/", sizeof(subdirPath));
-                cf_strlcat(subdirPath, dp->d_name, sizeof(subdirPath));
+#if TARGET_OS_WASI
+                // WASI doesn't support dirfd/fstatat, fall back to stat
+                char subdirPath[CFMaxPathLength];
+                snprintf(subdirPath, sizeof(subdirPath), "%s/%s", dirPath, dp->d_name);
                 if (stat(subdirPath, &statBuf) == 0) {
                     isDir = ((statBuf.st_mode & S_IFMT) == S_IFDIR);
                 }
+#else
+                int dirfd_fd = dirfd(dirp);
+                if (dirfd_fd >= 0 && fstatat(dirfd_fd, dp->d_name, &statBuf, 0) == 0) {
+                    isDir = ((statBuf.st_mode & S_IFMT) == S_IFDIR);
+                }
+#endif
             }
 #if TARGET_OS_LINUX || TARGET_OS_WASI
             fileURL = CFURLCreateFromFileSystemRepresentationRelativeToBase(alloc, (uint8_t *)dp->d_name, namelen, isDir, dirURL);
@@ -1106,13 +1111,10 @@ CF_PRIVATE void _CFIterateDirectory(CFStringRef directoryPath, Boolean appendSla
 #if TARGET_OS_LINUX
             CFIndex nameLen = strlen(dent->d_name);
             if (dent->d_type == DT_UNKNOWN) {
-                // on some old file systems readdir may always fill d_type as DT_UNKNOWN (0), double check with stat
+                // on some old file systems readdir may always fill d_type as DT_UNKNOWN (0), double check with fstatat
                 struct stat statBuf;
-                char pathToStat[sizeof(dent->d_name)];
-                strncpy(pathToStat, directoryPathBuf, sizeof(pathToStat));
-                cf_strlcat(pathToStat, "/", sizeof(pathToStat));
-                cf_strlcat(pathToStat, dent->d_name, sizeof(pathToStat));
-                if (stat(pathToStat, &statBuf) == 0) {
+                int dirfd_fd = dirfd(dirp);
+                if (dirfd_fd >= 0 && fstatat(dirfd_fd, dent->d_name, &statBuf, 0) == 0) {
                     if (S_ISDIR(statBuf.st_mode)) {
                         dent->d_type = DT_DIR;
                     } else if (S_ISREG(statBuf.st_mode)) {
@@ -1197,11 +1199,8 @@ CF_PRIVATE void _CFIterateDirectory(CFStringRef directoryPath, Boolean appendSla
                     // We need to do an additional stat on this to see if it's really a directory or not.
                     // This path should be uncommon.
                     struct stat statBuf;
-                    char pathToStat[sizeof(dent->d_name)];
-                    strncpy(pathToStat, directoryPathBuf, sizeof(pathToStat));
-                    cf_strlcat(pathToStat, "/", sizeof(pathToStat));
-                    cf_strlcat(pathToStat, dent->d_name, sizeof(pathToStat));
-                    if (stat(pathToStat, &statBuf) == 0) {
+                    int dirfd_fd = dirfd(dirp);
+                    if (dirfd_fd >= 0 && fstatat(dirfd_fd, dent->d_name, &statBuf, 0) == 0) {
                         isDirectory = S_ISDIR(statBuf.st_mode);
                     }
                 }

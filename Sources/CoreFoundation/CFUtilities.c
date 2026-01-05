@@ -921,24 +921,29 @@ static void _populateBanner(char **banner, char **time, char **thread, int *bann
 #if TARGET_OS_MAC
     uint64_t tid = 0;
     if (0 != pthread_threadid_np(NULL, &tid)) tid = pthread_mach_thread_np(pthread_self());
-    asprintf(banner, "%04d-%02d-%02d %02d:%02d:%02d.%03d %s[%d:%llu] ", year, month, day, hour, minute, second, ms, *_CFGetProgname(), getpid(), tid);
-    asprintf(thread, "%x", pthread_mach_thread_np(pthread_self()));
+    *bannerLen = asprintf(banner, "%04d-%02d-%02d %02d:%02d:%02d.%03d %s[%d:%llu] ", year, month, day, hour, minute, second, ms, *_CFGetProgname(), getpid(), tid);
+    if (*bannerLen < 0) *banner = NULL;
+    if (asprintf(thread, "%lx", (unsigned long)pthread_mach_thread_np(pthread_self())) < 0) *thread = NULL;
 #elif TARGET_OS_WIN32
-    *bannerLen = asprintf(banner, "%04d-%02d-%02d %02d:%02d:%02d.%03d %s[%d:%lx] ", year, month, day, hour, minute, second, ms, *_CFGetProgname(), getpid(), GetCurrentThreadId());
-    asprintf(thread, "%lx", GetCurrentThreadId());
+    DWORD threadId = GetCurrentThreadId();
+    *bannerLen = asprintf(banner, "%04d-%02d-%02d %02d:%02d:%02d.%03d %s[%d:%lx] ", year, month, day, hour, minute, second, ms, *_CFGetProgname(), getpid(), (unsigned long)threadId);
+    if (*bannerLen < 0) *banner = NULL;
+    if (asprintf(thread, "%lx", (unsigned long)threadId) < 0) *thread = NULL;
 #elif TARGET_OS_WASI
-    _CFThreadRef tid = 0;
-    // When pthread API is available from wasi-libc, use it. Otherwise use the dummy value.
+    unsigned long tid_val = 0;
 # if _POSIX_THREADS
-    tid = pthread_self();
+    tid_val = (unsigned long)(uintptr_t)pthread_self();
 # endif
-    *bannerLen = asprintf(banner, "%04d-%02d-%02d %02d:%02d:%02d.%03d [%x] ", year, month, day, hour, minute, second, ms, (unsigned int)tid);
-    asprintf(thread, "%lx", tid);
+    *bannerLen = asprintf(banner, "%04d-%02d-%02d %02d:%02d:%02d.%03d [%lx] ", year, month, day, hour, minute, second, ms, tid_val);
+    if (*bannerLen < 0) *banner = NULL;
+    if (asprintf(thread, "%lx", tid_val) < 0) *thread = NULL;
 #else
-    *bannerLen = asprintf(banner, "%04d-%02d-%02d %02d:%02d:%02d.%03d %s[%d:%x] ", year, month, day, hour, minute, second, ms, *_CFGetProgname(), getpid(), (unsigned int)pthread_self());
-    asprintf(thread, "%lx", pthread_self());
+    unsigned long tid_val = (unsigned long)(uintptr_t)pthread_self();
+    *bannerLen = asprintf(banner, "%04d-%02d-%02d %02d:%02d:%02d.%03d %s[%d:%lx] ", year, month, day, hour, minute, second, ms, *_CFGetProgname(), getpid(), tid_val);
+    if (*bannerLen < 0) *banner = NULL;
+    if (asprintf(thread, "%lx", tid_val) < 0) *thread = NULL;
 #endif
-    asprintf(time, "%04d-%02d-%02d %02d:%02d:%02d.%03d", year, month, day, hour, minute, second, ms);
+    if (asprintf(time, "%04d-%02d-%02d %02d:%02d:%02d.%03d", year, month, day, hour, minute, second, ms) < 0) *time = NULL;
 }
 
 static void _logToStderr(char *banner, const char *message, size_t length) {

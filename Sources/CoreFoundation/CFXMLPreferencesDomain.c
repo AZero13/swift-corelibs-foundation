@@ -11,6 +11,7 @@
 
 #include "CFPreferences.h"
 #include "CFURLAccess.h"
+#include "CFStream.h"
 #include "CFPropertyList.h"
 #include "CFNumber.h"
 #include "CFDate.h"
@@ -172,8 +173,8 @@ static void _loadXMLDomainIfStale(CFURLRef url, _CFXMLPreferencesDomain *domain)
     // We no longer lock on read; instead, we assume parse failures are because someone else is writing the file, and just try to parse again.  If we fail 3 times in a row, we assume the file is corrupted.  REW, 7/13/99
 
     for (idx = 0; idx < 3; idx ++) {
-        CFDataRef data;
-        if (!CFURLCreateDataAndPropertiesFromResource(alloc, url, &data, NULL, NULL, NULL) || !data) {
+        CFDataRef data = _CFDataCreateFromURL(url, NULL);
+        if (!data) {
             // Either a file system error (so we can't read the file), or an empty (or perhaps non-existent) file
             domain->_domainDict = CFDictionaryCreateMutable(alloc, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
             break;
@@ -343,8 +344,8 @@ static Boolean _writeXMLFile(CFURLRef url, CFMutableDictionaryRef dict, Boolean 
             success = CFURLWriteDataAndPropertiesToResource(url, data, URLPropertyDictForPOSIXMode(mode), NULL);
             URLPropertyDictRelease();
             if (success) {
-                CFDataRef readData;
-                if (!CFURLCreateDataAndPropertiesFromResource(alloc, url, &readData, NULL, NULL, NULL) || !CFEqual(readData, data)) {
+                CFDataRef readData = _CFDataCreateFromURL(url, NULL);
+                if (!readData || !CFEqual(readData, data)) {
                     success = false;
                     *tryAgain = true;
                 }
@@ -362,8 +363,8 @@ static Boolean _writeXMLFile(CFURLRef url, CFMutableDictionaryRef dict, Boolean 
                         success = CFURLWriteDataAndPropertiesToResource(url, data, URLPropertyDictForPOSIXMode(mode), NULL);
                         URLPropertyDictRelease();
                         if (success) {
-                            CFDataRef rdData;
-                            if (!CFURLCreateDataAndPropertiesFromResource(alloc, url, &rdData, NULL, NULL, NULL) || !CFEqual(rdData, data)) {
+                            CFDataRef rdData = _CFDataCreateFromURL(url, NULL);
+                            if (!rdData || !CFEqual(rdData, data)) {
                                 success = false;
                                 *tryAgain = true;
                             }

@@ -13,6 +13,7 @@
 #include "CFError_Private.h"
 #include "CFBundle_Internal.h"
 #include "CFByteOrder.h"
+#include "CFStream.h"
 #include "CFURLAccess.h"
 
 #if (TARGET_OS_MAC || TARGET_OS_LINUX || TARGET_OS_BSD || TARGET_OS_WASI) && !TARGET_OS_CYGWIN
@@ -765,18 +766,12 @@ static CFDictionaryRef _CFBundleCopyInfoDictionaryInDirectoryWithVersion(CFAlloc
         CFDataRef infoData = NULL;
         CFURLRef finalInfoPlistURL = NULL;
         if (platformInfoPlistURL) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated"
-            CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, platformInfoPlistURL, &infoData, NULL, NULL, NULL);
-#pragma GCC diagnostic pop
+            infoData = _CFDataCreateFromURL(platformInfoPlistURL, NULL);
             if (infoData) finalInfoPlistURL = platformInfoPlistURL;
         }
         
         if (!infoData && localInfoPlistURL) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated"
-            CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, localInfoPlistURL, &infoData, NULL, NULL, NULL);
-#pragma GCC diagnostic pop
+            infoData = _CFDataCreateFromURL(localInfoPlistURL, NULL);
             if (infoData) finalInfoPlistURL = localInfoPlistURL;
         }
         
@@ -860,26 +855,17 @@ static Boolean _CFBundleGetPackageInfoInDirectoryWithInfoDictionary(CFAllocatorR
     
     // Check for a "real" new bundle
     tempURL = CFURLCreateWithString(kCFAllocatorSystemDefault, _CFBundlePkgInfoURLFromBase2, url);
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated"
-    CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, tempURL, &pkgInfoData, NULL, NULL, NULL);
-#pragma GCC diagnostic pop
+    pkgInfoData = _CFDataCreateFromURL(tempURL, NULL);
     CFRelease(tempURL);
     if (!pkgInfoData) {
         tempURL = CFURLCreateWithString(kCFAllocatorSystemDefault, _CFBundlePkgInfoURLFromBase1, url);
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated"
-        CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, tempURL, &pkgInfoData, NULL, NULL, NULL);
-#pragma GCC diagnostic pop
+        pkgInfoData = _CFDataCreateFromURL(tempURL, NULL);
         CFRelease(tempURL);
     }
     if (!pkgInfoData) {
         // Check for a "pseudo" new bundle
         tempURL = CFURLCreateWithString(kCFAllocatorSystemDefault, _CFBundlePseudoPkgInfoURLFromBase, url);
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated"
-        CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, tempURL, &pkgInfoData, NULL, NULL, NULL);
-#pragma GCC diagnostic pop
+        pkgInfoData = _CFDataCreateFromURL(tempURL, NULL);
         CFRelease(tempURL);
     }
     
@@ -1047,12 +1033,10 @@ CFDictionaryRef CFBundleGetLocalInfoDictionary(CFBundleRef bundle) {
         CFURLRef url = CFBundleCopyResourceURL(bundle, _CFBundleLocalInfoName, _CFBundleStringTableType, NULL);
         if (url) {
             CFDataRef data;
-            SInt32 errCode;
             CFStringRef errStr = NULL;
             
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated"
-            if (CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, url, &data, NULL, NULL, &errCode)) {
+            data = _CFDataCreateFromURL(url, NULL);
+            if (data) {
                 localInfoDict = (CFDictionaryRef)CFPropertyListCreateFromXMLData(kCFAllocatorSystemDefault, data, kCFPropertyListMutableContainers, &errStr);
                 if (errStr) CFRelease(errStr);
                 if (localInfoDict && CFDictionaryGetTypeID() != CFGetTypeID(localInfoDict)) {
@@ -1061,7 +1045,6 @@ CFDictionaryRef CFBundleGetLocalInfoDictionary(CFBundleRef bundle) {
                 }
                 CFRelease(data);
             }
-#pragma GCC diagnostic pop
             CFRelease(url);
         }
         if (localInfoDict) _CFBundleInfoPlistProcessInfoDictionary((CFMutableDictionaryRef)localInfoDict);

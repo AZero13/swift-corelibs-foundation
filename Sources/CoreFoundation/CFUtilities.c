@@ -25,6 +25,7 @@
 #if TARGET_OS_MAC || TARGET_OS_WIN32
 #include "CFBundle.h"
 #endif
+#include "CFStream.h"
 #include "CFURLAccess.h"
 #if !TARGET_OS_WASI
 #include "CFPropertyList.h"
@@ -300,14 +301,14 @@ static CFDictionaryRef _CFCopyVersionDictionary(CFStringRef path) {
     CFURLRef url;
     
     url = CFURLCreateWithFileSystemPath(kCFAllocatorSystemDefault, path, kCFURLPOSIXPathStyle, false);
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated"
-    if (url && CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, url, &data, NULL, NULL, NULL)) {
-#pragma GCC diagnostic pop
-        plist = CFPropertyListCreateWithData(kCFAllocatorSystemDefault, data, kCFPropertyListMutableContainers, NULL, NULL);
-	CFRelease(data);
+    if (url) {
+        data = _CFDataCreateFromURL(url, NULL);
+        if (data) {
+            plist = CFPropertyListCreateWithData(kCFAllocatorSystemDefault, data, kCFPropertyListMutableContainers, NULL, NULL);
+            CFRelease(data);
+        }
+        CFRelease(url);
     }
-    if (url) CFRelease(url);
 
     if (plist) {
 	CFBundleRef locBundle = NULL;

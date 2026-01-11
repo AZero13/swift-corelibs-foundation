@@ -105,7 +105,7 @@ static void _CFDateFormatterStripAMPMIndicators(UniChar **bpat, int32_t *bpatlen
         UniChar c = (*bpat)[idx];
         if (c == 'a' || c == 'b' || c == 'B' || c == 'C') {
             //back up
-            while (CFCharacterSetIsCharacterMember(whitespaceChars, (*bpat)[idx - 1])) {
+            while (idx > 0 && CFCharacterSetIsCharacterMember(whitespaceChars, (*bpat)[idx - 1])) {
                 idx--;
             }
 

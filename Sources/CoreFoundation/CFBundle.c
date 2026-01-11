@@ -1781,7 +1781,7 @@ CFArrayRef CFBundleGetAllBundles(void) {
         } else {
             _lastBundleList = result;
         }
-    } else if (!CFEqual(_lastBundleList, _allBundles)) {
+    } else if (!_allBundles || !CFEqual(_lastBundleList, _allBundles)) {
         // Check if the list of bundles has changed
         _CFMutexUnlock(&CFBundleGlobalDataLock);
         result = _CFBundleCopyAllBundles();
@@ -1804,10 +1804,22 @@ CF_EXPORT CFArrayRef _CFBundleCopyAllBundles(void) {
     if (!_allBundles) {
         __CFBundleCreateAllBundlesArrayLocked();
     }
+    // Handle case where _allBundles allocation failed (OOM)
+    if (!_allBundles) {
+        _CFMutexUnlock(&CFBundleGlobalDataLock);
+        // Return array containing just the main bundle
+        CFMutableArrayRef bundles = CFArrayCreateMutable(kCFAllocatorSystemDefault, 1, &kCFTypeArrayCallBacks);
+        if (bundles && main) {
+            CFArrayAppendValue(bundles, main);
+        }
+        return bundles;
+    }
     // _allBundles does not include the main bundle, so insert it here.
     CFMutableArrayRef bundles = CFArrayCreateMutableCopy(kCFAllocatorSystemDefault, CFArrayGetCount(_allBundles) + 1, _allBundles);
     _CFMutexUnlock(&CFBundleGlobalDataLock);
-    CFArrayInsertValueAtIndex(bundles, 0, main);
+    if (bundles && main) {
+        CFArrayInsertValueAtIndex(bundles, 0, main);
+    }
     return bundles;
 }
 

@@ -389,8 +389,8 @@ caseFoldRetry:
                 }
             }
         }
-        switch (*(uint16_t *)langCode) {
-            case LITHUANIAN_LANG_CODE:
+        // Direct byte comparison - endian-independent and clear
+        if (langCode[0] == 'l' && langCode[1] == 't') {  // Lithuanian
                 if (theChar == 0x0307 && (flags & kCFUniCharCaseMapAfter_i)) {
                     return 0;
                 } else if (ctype == kCFUniCharToLowercase) {
@@ -436,10 +436,8 @@ caseFoldRetry:
                         default: break;
                     }
                 }
-            break;
-
-            case TURKISH_LANG_CODE:
-            case AZERI_LANG_CODE:
+        } else if ((langCode[0] == 't' && langCode[1] == 'r') ||  // Turkish
+                   (langCode[0] == 'a' && langCode[1] == 'z')) {  // Azeri
                 if ((theChar == 0x0049) || (theChar == 0x0131)) { // LATIN CAPITAL LETTER I & LATIN SMALL LETTER DOTLESS I
                     *convertedChar = (((ctype == kCFUniCharToLowercase) || (ctype == kCFUniCharCaseFold))  ? ((kCFUniCharCaseMapMoreAbove & flags) ? 0x0069 : 0x0131) : 0x0049);
                     return 1;
@@ -454,16 +452,10 @@ caseFoldRetry:
                         return 1;
                     }
                 }
-                break;
-
-        case DUTCH_LANG_CODE:
-        if ((theChar == 0x004A) || (theChar == 0x006A)) {
+        } else if (langCode[0] == 'n' && langCode[1] == 'l') {  // Dutch
+            if ((theChar == 0x004A) || (theChar == 0x006A)) {
                     *convertedChar = (((ctype == kCFUniCharToUppercase) || (ctype == kCFUniCharToTitlecase) || (kCFUniCharCaseMapDutchDigraph & flags)) ? 0x004A  : 0x006A);
                     return 1;
-        }
-        break;
-
-            default: break;
         }
     }
 #endif // DO_SPECIAL_CASE_MAPPING
@@ -655,7 +647,7 @@ CF_PRIVATE uint32_t CFUniCharGetConditionalCaseMappingFlags(UTF32Char theChar, U
             return kCFUniCharCaseMapFinalSigma;
         }
     } else if (langCode) {
-        if (*((const uint16_t *)langCode) == LITHUANIAN_LANG_CODE) {
+        if (langCode[0] == 'l' && langCode[1] == 't') {  // Lithuanian
             if ((theChar == 0x0307) && ((kCFUniCharCaseMapAfter_i|kCFUniCharCaseMapMoreAbove) & lastFlags) == (kCFUniCharCaseMapAfter_i|kCFUniCharCaseMapMoreAbove)) {
                 return (__CFUniCharIsAfter_i(buffer, currentIndex) ? kCFUniCharCaseMapAfter_i : 0);
             } else if (type == kCFUniCharToLowercase) {
@@ -667,7 +659,8 @@ CF_PRIVATE uint32_t CFUniCharGetConditionalCaseMappingFlags(UTF32Char theChar, U
                 ++currentIndex;
                 return (__CFUniCharIsMoreAbove(buffer + currentIndex, length - currentIndex) ? (kCFUniCharCaseMapAfter_i|kCFUniCharCaseMapMoreAbove) : 0);
             }
-        } else if ((*((const uint16_t *)langCode) == TURKISH_LANG_CODE) || (*((const uint16_t *)langCode) == AZERI_LANG_CODE)) {
+        } else if ((langCode[0] == 't' && langCode[1] == 'r') ||  // Turkish
+                   (langCode[0] == 'a' && langCode[1] == 'z')) {  // Azeri
             if (type == kCFUniCharToLowercase) {
                 if (theChar == 0x0307) {
                     return (kCFUniCharCaseMapMoreAbove & lastFlags ? kCFUniCharCaseMapAfter_i : 0);
@@ -675,7 +668,7 @@ CF_PRIVATE uint32_t CFUniCharGetConditionalCaseMappingFlags(UTF32Char theChar, U
                     return (((++currentIndex < length) && (buffer[currentIndex] == 0x0307)) ? kCFUniCharCaseMapMoreAbove : 0);
                 }
             }
-        } else if (*((const uint16_t *)langCode) == DUTCH_LANG_CODE) {
+        } else if (langCode[0] == 'n' && langCode[1] == 'l') {  // Dutch
         if (kCFUniCharCaseMapDutchDigraph & lastFlags) {
         return (((theChar == 0x006A) || (theChar == 0x004A)) ? kCFUniCharCaseMapDutchDigraph : 0);
         } else {

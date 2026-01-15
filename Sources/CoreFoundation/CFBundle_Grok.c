@@ -439,7 +439,7 @@ static UInt32 _CFBundleGrokMachTypeForFatFile(int fd, const void *bytes, CFIndex
             moreBytes = bytes + fat->offset;
         }
         if (moreBytes) {
-            magic = *((UInt32 *)moreBytes);
+            magic = _CFUnalignedLoad32(moreBytes);
             if (MH_MAGIC == magic) {
                 machtype = ((struct mach_header *)moreBytes)->filetype;
                 if (isX11 && MH_EXECUTE == machtype) *isX11 = _CFBundleGrokX11FromFile(fd, bytes, length, fat->offset, false, false);
@@ -467,7 +467,7 @@ static UInt32 _CFBundleGrokMachTypeForFatFile(int fd, const void *bytes, CFIndex
 }
 
 static UInt32 _CFBundleGrokMachType(int fd, const void *bytes, CFIndex length, Boolean *isX11, CFArrayRef *architectures, CFDictionaryRef *infodict, Boolean *hasObjc, uint32_t *objcVersion, uint32_t *objcFlags) {
-    unsigned int magic = *((UInt32 *)bytes), machtype = UNKNOWN_FILETYPE, cputype;
+    unsigned int magic = _CFUnalignedLoad32(bytes), machtype = UNKNOWN_FILETYPE, cputype;
     CFNumberRef architecture = NULL;
 
     if (isX11) *isX11 = false;
@@ -519,10 +519,10 @@ static UInt32 _CFBundleGrokMachType(int fd, const void *bytes, CFIndex length, B
 #endif /* BINARY_SUPPORT_DYLD */
 
 static Boolean _CFBundleGrokFileTypeForZipMimeType(const unsigned char *bytes, CFIndex length, const char **ext) {
-    unsigned namelength = CFSwapInt16HostToLittle(*((UInt16 *)(bytes + 26))), extralength = CFSwapInt16HostToLittle(*((UInt16 *)(bytes + 28)));
+    unsigned namelength = CFSwapInt16HostToLittle(_CFUnalignedLoad16(bytes + 26)), extralength = CFSwapInt16HostToLittle(_CFUnalignedLoad16(bytes + 28));
     const unsigned char *data = bytes + 30 + namelength + extralength;
     int i = -1;
-    if (bytes < data && data + 56 <= bytes + length && 0 == CFSwapInt16HostToLittle(*((UInt16 *)(bytes + 8))) && (0 == ustrncasecmp(data, "application/vnd.", 16) || 0 == ustrncasecmp(data, "application/x-vnd.", 18))) {
+    if (bytes < data && data + 56 <= bytes + length && 0 == CFSwapInt16HostToLittle(_CFUnalignedLoad16(bytes + 8)) && (0 == ustrncasecmp(data, "application/vnd.", 16) || 0 == ustrncasecmp(data, "application/x-vnd.", 18))) {
         data += ('.' == *(data + 15)) ? 16 : 18;
         if (0 == ustrncasecmp(data, "sun.xml.", 8)) {
             data += 8;
@@ -546,7 +546,7 @@ static Boolean _CFBundleGrokFileTypeForZipMimeType(const unsigned char *bytes, C
             else if (0 == ustrncasecmp(data, "text", 4)) i = 8;
             if (i >= 0 && ext) *ext = __CFBundleODExtensionsArray + i * EXTENSION_LENGTH;
         }
-    } else if (bytes < data && data + 41 <= bytes + length && 8 == CFSwapInt16HostToLittle(*((UInt16 *)(bytes + 8))) && 0x4b2c28c8 == CFSwapInt32HostToBig(*((UInt32 *)data)) && 0xc94c4e2c == CFSwapInt32HostToBig(*((UInt32 *)(data + 4)))) {
+    } else if (bytes < data && data + 41 <= bytes + length && 8 == CFSwapInt16HostToLittle(_CFUnalignedLoad16(bytes + 8)) && 0x4b2c28c8 == CFSwapInt32HostToBig(_CFUnalignedLoad32(data)) && 0xc94c4e2c == CFSwapInt32HostToBig(_CFUnalignedLoad32(data + 4))) {
         // AbiWord compressed mimetype odt
         if (ext) *ext = "odt";
         // almost certainly this should set i to 0 but I don't want to upset the apple cart now
@@ -574,10 +574,10 @@ static const char *_CFBundleGrokFileTypeForZipFile(int fd, const unsigned char *
             if (0x50 == bytes[i] && 0x4b == bytes[i + 1]) {
                 unsigned namelength = 0, offset = 0;
                 if (0x01 == bytes[i + 2] && 0x02 == bytes[i + 3]) {
-                    namelength = (unsigned)CFSwapInt16HostToLittle(*((UInt16 *)(bytes + i + 28)));
+                    namelength = (unsigned)CFSwapInt16HostToLittle(_CFUnalignedLoad16(bytes + i + 28));
                     offset = 46;
                 } else if (0x03 == bytes[i + 2] && 0x04 == bytes[i + 3]) {
-                    namelength = (unsigned)CFSwapInt16HostToLittle(*((UInt16 *)(bytes + i + 26)));
+                    namelength = (unsigned)CFSwapInt16HostToLittle(_CFUnalignedLoad16(bytes + i + 26));
                     offset = 30;
                 }
                 if (offset > 0 && (CFIndex)(i + offset + namelength) <= length) {
@@ -616,10 +616,10 @@ static const char *_CFBundleGrokFileTypeForZipFile(int fd, const unsigned char *
                 if (0x50 == moreBytes[i] && 0x4b == moreBytes[i + 1]) {
                     unsigned namelength = 0, offset = 0;
                     if (0x01 == moreBytes[i + 2] && 0x02 == moreBytes[i + 3]) {
-                        namelength = CFSwapInt16HostToLittle(*((UInt16 *)(moreBytes + i + 28)));
+                        namelength = CFSwapInt16HostToLittle(_CFUnalignedLoad16(moreBytes + i + 28));
                         offset = 46;
                     } else if (0x03 == moreBytes[i + 2] && 0x04 == moreBytes[i + 3]) {
-                        namelength = CFSwapInt16HostToLittle(*((UInt16 *)(moreBytes + i + 26)));
+                        namelength = CFSwapInt16HostToLittle(_CFUnalignedLoad16(moreBytes + i + 26));
                         offset = 30;
                     }
                     if (offset > 0 && i + offset + namelength <= ZIP_BYTES_TO_READ) {
@@ -733,12 +733,12 @@ static Boolean _CFBundleGrokFileType(CFURLRef url, CFDataRef data, CFStringRef *
     }
     if (bytes) {
         if (length >= 4) {
-            UInt32 magic = CFSwapInt32HostToBig(*((UInt32 *)bytes));
+            UInt32 magic = CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes));
             for (i = 0; !ext && i < NUM_EXTENSIONS; i++) {
                 if (__CFBundleMagicNumbersArray[i] == magic) ext = __CFBundleExtensionsArray + i * EXTENSION_LENGTH;
             }
             if (ext) {
-                if (0xcafebabe == magic && 8 <= length && 0 != *((UInt16 *)(bytes + 4))) ext = "class";
+                if (0xcafebabe == magic && 8 <= length && 0 != _CFUnalignedLoad16(bytes + 4)) ext = "class";
 #if defined(BINARY_SUPPORT_DYLD)
                 else if ((int)sizeof(struct mach_header_64) <= length) mt = _CFBundleGrokMachType(fd, bytes, length, extension ? &isX11 : NULL, architectures, infodict, hasObjc, objcVersion, objcFlags);
                 
@@ -752,21 +752,21 @@ static Boolean _CFBundleGrokFileType(CFURLRef url, CFDataRef data, CFStringRef *
                 else if (0x7b5c7274 == magic && (6 > length || 'f' != bytes[4])) ext = NULL;
                 else if (0x25504446 == magic && (6 > length || '-' != bytes[4])) ext = NULL;
                 else if (0x00010000 == magic && (6 > length || 0 != bytes[4])) ext = NULL;
-                else if (0x47494638 == magic && (6 > length || (0x3761 != CFSwapInt16HostToBig(*((UInt16 *)(bytes + 4))) && 0x3961 != CFSwapInt16HostToBig(*((UInt16 *)(bytes + 4))))))  ext = NULL;
-                else if (0x0000000c == magic && (6 > length || 0x6a50 != CFSwapInt16HostToBig(*((UInt16 *)(bytes + 4))))) ext = NULL;
-                else if (0x2356524d == magic && (6 > length || 0x4c20 != CFSwapInt16HostToBig(*((UInt16 *)(bytes + 4))))) ext = NULL;
-                else if (0x28445746 == magic && (6 > length || 0x2056 != CFSwapInt16HostToBig(*((UInt16 *)(bytes + 4))))) ext = NULL;
+                else if (0x47494638 == magic && (6 > length || (0x3761 != CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 4)) && 0x3961 != CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 4)))))  ext = NULL;
+                else if (0x0000000c == magic && (6 > length || 0x6a50 != CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 4)))) ext = NULL;
+                else if (0x2356524d == magic && (6 > length || 0x4c20 != CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 4)))) ext = NULL;
+                else if (0x28445746 == magic && (6 > length || 0x2056 != CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 4)))) ext = NULL;
                 else if (0x30373037 == magic && (6 > length || 0x30 != bytes[4] || !isdigit(bytes[5]))) ext = NULL;
                 else if (0x41433130 == magic && (6 > length || 0x31 != bytes[4] || !isdigit(bytes[5]))) ext = NULL;
-                else if (0x89504e47 == magic && (8 > length || 0x0d0a1a0a != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = NULL;
-                else if (0x53747566 == magic && (8 > length || 0x66497420 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = NULL;
-                else if (0x3026b275 == magic && (8 > length || 0x8e66cf11 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = NULL;
-                else if (0x67696d70 == magic && (8 > length || 0x20786366 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = NULL;
-                else if (0x424f4d53 == magic && (8 > length || 0x746f7265 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = NULL;
-                else if (0x49544f4c == magic && (8 > length || 0x49544c53 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = NULL;
-                else if (0x72746664 == magic && (8 > length || 0x00000000 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = NULL;
-                else if (0x3d796265 == magic && (12 > length || 0x67696e20 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))) || (0x6c696e65 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 8))) && 0x70617274 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 8)))))) ext = NULL;
-                else if (0x63616666 == magic && (12 > length || 0 != bytes[4] || 0x64657363 != CFSwapInt32HostToBig(*((UInt32 *)(bytes + 8))))) ext = NULL;
+                else if (0x89504e47 == magic && (8 > length || 0x0d0a1a0a != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = NULL;
+                else if (0x53747566 == magic && (8 > length || 0x66497420 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = NULL;
+                else if (0x3026b275 == magic && (8 > length || 0x8e66cf11 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = NULL;
+                else if (0x67696d70 == magic && (8 > length || 0x20786366 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = NULL;
+                else if (0x424f4d53 == magic && (8 > length || 0x746f7265 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = NULL;
+                else if (0x49544f4c == magic && (8 > length || 0x49544c53 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = NULL;
+                else if (0x72746664 == magic && (8 > length || 0x00000000 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = NULL;
+                else if (0x3d796265 == magic && (12 > length || 0x67696e20 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)) || (0x6c696e65 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 8)) && 0x70617274 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 8))))) ext = NULL;
+                else if (0x63616666 == magic && (12 > length || 0 != bytes[4] || 0x64657363 != CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 8)))) ext = NULL;
                 else if (0x504b0304 == magic) ext = _CFBundleGrokFileTypeForZipFile(fd, bytes, length, fileLength);
                 else if (0x25215053 == magic) {
                     if (11 <= length && 0 == ustrncmp(bytes + 4, "-Adobe-", 7)) ext = "ps";
@@ -776,7 +776,7 @@ static Boolean _CFBundleGrokFileType(CFURLRef url, CFDataRef data, CFStringRef *
                     // IFF
                     ext = NULL;
                     if (12 <= length) {
-                        UInt32 iffMagic = CFSwapInt32HostToBig(*((UInt32 *)(bytes + 8)));
+                        UInt32 iffMagic = CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 8));
                         if (0x41494646 == iffMagic) ext = "aiff";
                         else if (0x414946 == iffMagic) ext = "aifc";
                     }
@@ -784,13 +784,13 @@ static Boolean _CFBundleGrokFileType(CFURLRef url, CFDataRef data, CFStringRef *
                     // RIFF
                     ext = NULL;
                     if (12 <= length) {
-                        UInt32 riffMagic = CFSwapInt32HostToBig(*((UInt32 *)(bytes + 8)));
+                        UInt32 riffMagic = CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 8));
                         if (0x57415645 == riffMagic) ext = "wav";
                         else if (0x41564920 == riffMagic) ext = "avi";
                     }
                 } else if (0xd0cf11e0 == magic) {
                     // OLE
-                    if (52 <= length) ext = _CFBundleGrokFileTypeForOLEFile(fd, bytes, length, 512 * (1 + CFSwapInt32HostToLittle(*((UInt32 *)(bytes + 48)))));
+                    if (52 <= length) ext = _CFBundleGrokFileTypeForOLEFile(fd, bytes, length, 512 * (1 + CFSwapInt32HostToLittle(_CFUnalignedLoad32(bytes + 48))));
                 } else if (0x62656769 == magic) {
                     // uu
                     ext = NULL;
@@ -805,19 +805,19 @@ static Boolean _CFBundleGrokFileType(CFURLRef url, CFDataRef data, CFStringRef *
                 }
             }
             if (extension && !ext) {
-                UInt16 shortMagic = CFSwapInt16HostToBig(*((UInt16 *)bytes));
+                UInt16 shortMagic = CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes));
                 if (5 <= length && 0 == bytes[3] && 0 == bytes[4] && ((1 == bytes[1] && 1 == (0xf7 & bytes[2])) || (0 == bytes[1] && (2 == (0xf7 & bytes[2]) || (3 == (0xf7 & bytes[2])))))) ext = "tga";
-                else if (8 <= length && (0x6d6f6f76 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))) || 0x6d646174 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))) || 0x77696465 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = "mov";
-                else if (8 <= length && (0x69647363 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))) || 0x69646174 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = "qtif";
-                else if (8 <= length && 0x424f424f == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4)))) ext = "cwk";
-                else if (8 <= length && 0x62706c69 == magic && 0x7374 == CFSwapInt16HostToBig(*((UInt16 *)(bytes + 4))) && isdigit(bytes[6]) && isdigit(bytes[7])) {
+                else if (8 <= length && (0x6d6f6f76 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)) || 0x6d646174 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)) || 0x77696465 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = "mov";
+                else if (8 <= length && (0x69647363 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)) || 0x69646174 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = "qtif";
+                else if (8 <= length && 0x424f424f == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4))) ext = "cwk";
+                else if (8 <= length && 0x62706c69 == magic && 0x7374 == CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 4)) && isdigit(bytes[6]) && isdigit(bytes[7])) {
                     for (i = 8; !ext && i < 128 && i + 16 <= length; i++) {
                         if (0 == ustrncmp(bytes + i, "WebMainResource", 15)) ext = "webarchive";
                     }
                     if (!ext) ext = "plist";
-                } else if (0 == shortMagic && 12 <= length && 0x66747970 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4)))) {
+                } else if (0 == shortMagic && 12 <= length && 0x66747970 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4))) {
                     // ??? may want more ftyp values
-                    UInt32 ftyp = CFSwapInt32HostToBig(*((UInt32 *)(bytes + 8)));
+                    UInt32 ftyp = CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 8));
                     if (0x6d703431 == ftyp || 0x6d703432 == ftyp || 0x69736f6d == ftyp || 0x69736f32 == ftyp) ext = "mp4";
                     else if (0x4d344120 == ftyp) ext = "m4a";
                     else if (0x4d344220 == ftyp) ext = "m4b";
@@ -829,18 +829,18 @@ static Boolean _CFBundleGrokFileType(CFURLRef url, CFDataRef data, CFStringRef *
                         else if (0x3261 == remainder) ext = "3g2";
                     }
                 } else if (0x424d == shortMagic && 18 <= length) {
-                    UInt32 btyp = CFSwapInt32HostToLittle(*((UInt32 *)(bytes + 14)));
+                    UInt32 btyp = CFSwapInt32HostToLittle(_CFUnalignedLoad32(bytes + 14));
                     if (40 == btyp || btyp == 12 || btyp == 64 || btyp == 108 || btyp == 124) ext = "bmp";
                 } else if (20 <= length && 0 == ustrncmp(bytes + 6, "%!PS-AdobeFont", 14)) ext = "pfb";
-                else if (40 <= length && 0x42696e48 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 34))) && 0x6578 == CFSwapInt16HostToBig(*((UInt16 *)(bytes + 38)))) ext = "hqx";
-                else if (128 <= length && 0x6d42494e == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 102)))) ext = "bin";
+                else if (40 <= length && 0x42696e48 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 34)) && 0x6578 == CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 38))) ext = "hqx";
+                else if (128 <= length && 0x6d42494e == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 102))) ext = "bin";
                 else if (128 <= length && 0 == bytes[0] && 0 < bytes[1] && bytes[1] < 64 && 0 == bytes[74] && 0 == bytes[82] && 0 == (fileLength % 128)) {
-                    UInt32 df = CFSwapInt32HostToBig(*((UInt32 *)(bytes + 83))), rf = CFSwapInt32HostToBig(*((UInt32 *)(bytes + 87))), blocks = 1 + (df + 127) / 128 + (rf + 127) / 128;
+                    UInt32 df = CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 83)), rf = CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 87)), blocks = 1 + (df + 127) / 128 + (rf + 127) / 128;
                     if (df < 0x00800000 && rf < 0x00800000 && 1 < blocks && (off_t)(128 * blocks) == fileLength) ext = "bin";
-                } else if (265 <= length && 0x75737461 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 257))) && (0x72202000 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 261))) || 0x7200 == CFSwapInt16HostToBig(*((UInt16 *)(bytes + 261))))) ext = "tar";
+                } else if (265 <= length && 0x75737461 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 257)) && (0x72202000 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 261)) || 0x7200 == CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 261)))) ext = "tar";
                 else if (0xfeff == shortMagic || 0xfffe == shortMagic) {
                     ext = "txt";
-                    if (12 <= length && ((0x3cfeff == *((UInt32 *)bytes) && 0x740068 == *((UInt32 *)(bytes + 4)) && 0x6c006d == *((UInt32 *)(bytes + 8))) || (0xfffe3c00 == *((UInt32 *)bytes) && 0x68007400 == *((UInt32 *)(bytes + 4)) && 0x6d006c00 == *((UInt32 *)(bytes + 8))))) ext = "html";
+                    if (12 <= length && ((0x3cfeff == _CFUnalignedLoad32(bytes) && 0x740068 == _CFUnalignedLoad32(bytes + 4) && 0x6c006d == _CFUnalignedLoad32(bytes + 8)) || (0xfffe3c00 == _CFUnalignedLoad32(bytes) && 0x68007400 == _CFUnalignedLoad32(bytes + 4) && 0x6d006c00 == _CFUnalignedLoad32(bytes + 8)))) ext = "html";
                 } else if (0x1f9d == shortMagic) ext = "Z";
                 else if (0x1f8b == shortMagic) ext = "gz";
                 else if (0x71c7 == shortMagic || 0xc771 == shortMagic) ext = "cpio";
@@ -863,8 +863,8 @@ static Boolean _CFBundleGrokFileType(CFURLRef url, CFDataRef data, CFStringRef *
                 else if (0x4357 == shortMagic && 0x53 == bytes[2]) ext = "swc";
                 else if (0x4944 == shortMagic && '3' == bytes[2] && 0x20 > bytes[3]) ext = "mp3";
                 else if (0x425a == shortMagic && isdigit(bytes[2]) && isdigit(bytes[3])) ext = "bz";
-                else if (0x425a == shortMagic && 'h' == bytes[2] && isdigit(bytes[3]) && 8 <= length && (0x31415926 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))) || 0x17724538 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 4))))) ext = "bz2";
-                else if (0x0011 == CFSwapInt16HostToBig(*((UInt16 *)(bytes + 2))) || 0x0012 == CFSwapInt16HostToBig(*((UInt16 *)(bytes + 2)))) ext = "tfm";
+                else if (0x425a == shortMagic && 'h' == bytes[2] && isdigit(bytes[3]) && 8 <= length && (0x31415926 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)) || 0x17724538 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 4)))) ext = "bz2";
+                else if (0x0011 == CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 2)) || 0x0012 == CFSwapInt16HostToBig(_CFUnalignedLoad16(bytes + 2))) ext = "tfm";
             }
         }
         if (extension && !ext) {
@@ -910,10 +910,10 @@ static Boolean _CFBundleGrokFileType(CFURLRef url, CFDataRef data, CFStringRef *
                 } else if (isZero && length >= MAGIC_BYTES_TO_READ && fileLength >= 526) {
                     if (isFile) {
                         if (lseek(fd, 512, SEEK_SET) == 512 && read(fd, buffer, MAGIC_BYTES_TO_READ) >= 14) {
-                            if (0x001102ff == CFSwapInt32HostToBig(*((UInt32 *)(buffer + 10)))) ext = "pict";
+                            if (0x001102ff == CFSwapInt32HostToBig(_CFUnalignedLoad32(buffer + 10))) ext = "pict";
                         }
                     } else {
-                        if (526 <= length && 0x001102ff == CFSwapInt32HostToBig(*((UInt32 *)(bytes + 522)))) ext = "pict";
+                        if (526 <= length && 0x001102ff == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + 522))) ext = "pict";
                     }
                 }
             }
@@ -921,10 +921,10 @@ static Boolean _CFBundleGrokFileType(CFURLRef url, CFDataRef data, CFStringRef *
         if (extension && (!ext || 0 == strcmp(ext, "bz2")) && length >= MAGIC_BYTES_TO_READ && fileLength >= DMG_BYTES_TO_READ) {
             if (isFile) {
                 if (lseek(fd, fileLength - DMG_BYTES_TO_READ, SEEK_SET) == fileLength - DMG_BYTES_TO_READ && read(fd, buffer, DMG_BYTES_TO_READ) >= DMG_BYTES_TO_READ) {
-                    if (0x6b6f6c79 == CFSwapInt32HostToBig(*((UInt32 *)buffer)) || (0x63647361 == CFSwapInt32HostToBig(*((UInt32 *)(buffer + DMG_BYTES_TO_READ - 8))) && 0x656e6372 == CFSwapInt32HostToBig(*((UInt32 *)(buffer + DMG_BYTES_TO_READ - 4))))) ext = "dmg";
+                    if (0x6b6f6c79 == CFSwapInt32HostToBig(_CFUnalignedLoad32(buffer)) || (0x63647361 == CFSwapInt32HostToBig(_CFUnalignedLoad32(buffer + DMG_BYTES_TO_READ - 8)) && 0x656e6372 == CFSwapInt32HostToBig(_CFUnalignedLoad32(buffer + DMG_BYTES_TO_READ - 4)))) ext = "dmg";
                 }
             } else {
-                if (DMG_BYTES_TO_READ <= length && (0x6b6f6c79 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + length - DMG_BYTES_TO_READ))) || (0x63647361 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + length - 8))) && 0x656e6372 == CFSwapInt32HostToBig(*((UInt32 *)(bytes + length - 4)))))) ext = "dmg";
+                if (DMG_BYTES_TO_READ <= length && (0x6b6f6c79 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + length - DMG_BYTES_TO_READ)) || (0x63647361 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + length - 8)) && 0x656e6372 == CFSwapInt32HostToBig(_CFUnalignedLoad32(bytes + length - 4))))) ext = "dmg";
             }
         }
     }

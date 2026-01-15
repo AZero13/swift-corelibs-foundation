@@ -1286,6 +1286,19 @@ CF_INLINE void _CFUnalignedStore32(void *ptr, uint32_t value) {
 }
 
 
+CF_INLINE uint16_t _CFUnalignedLoad16(const void *ptr) {
+    uint8_t *bytes = (uint8_t *)ptr;
+#if __LITTLE_ENDIAN__
+    uint16_t result = (uint16_t)bytes[0];
+    result |= ((uint16_t)bytes[1] << 8);
+#else
+    uint16_t result = (uint16_t)bytes[0] << 8;
+    result |= (uint16_t)bytes[1];
+#endif
+    return result;
+}
+
+
 // Load values stored in Big Endian order in memory.
 CF_INLINE uint16_t _CFUnalignedLoad16BE(const void *ptr) {
     uint8_t *bytes = (uint8_t *)ptr;

@@ -871,6 +871,7 @@ void _CFArrayReplaceValues(CFMutableArrayRef array, CFRange range, const void **
     /* Retain new values if needed, possibly allocating a temporary buffer for them */
     if (NULL != cb->retain) {
         newv = (newCount <= 256) ? (const void **)buffer : (const void **)CFAllocatorAllocate(kCFAllocatorSystemDefault, newCount * sizeof(void *), 0);
+        if (newv == NULL) __CFArrayHandleOutOfMemory(array, newCount * sizeof(void *));
         if (newv != buffer && __CFOASafe) __CFSetLastAllocationEventName(newv, "CFArray (temp)");
         for (idx = 0; idx < newCount; idx++) {
             newv[idx] = (void *)INVOKE_CALLBACK2(cb->retain, allocator, (void *)newValues[idx]);

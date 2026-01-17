@@ -7,6 +7,8 @@
 // See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 
+@available(*, unavailable)
+extension NSIndexPath : @unchecked Sendable { }
 
 open class NSIndexPath : NSObject, NSCopying, NSSecureCoding {
     
@@ -24,7 +26,7 @@ open class NSIndexPath : NSObject, NSCopying, NSSecureCoding {
         }
     }
     
-    private init(indexes: [Int]) {
+    internal init(indexes: [Int]) {
         _indexes = indexes
     }
     

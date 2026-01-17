@@ -10,10 +10,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-
+#if canImport(Dispatch)
 import Dispatch
 
+@available(*, unavailable)
+extension DispatchData.Region : @unchecked Sendable { }
+
 extension DispatchData : DataProtocol {
+    public typealias Regions = [Region]
+    
     public struct Region : DataProtocol, ContiguousBytes {
         internal let bytes: UnsafeBufferPointer<UInt8>
         internal let index: DispatchData.Index
@@ -29,7 +34,7 @@ extension DispatchData : DataProtocol {
         }
         
         public subscript(position: DispatchData.Index) -> UInt8 {
-            precondition(index <= position && position <= index + bytes.count)
+            precondition(index <= position && position < index + bytes.count)
             return bytes[position - index]
         }
         
@@ -54,3 +59,4 @@ extension DispatchData : DataProtocol {
         return regions
     }
 }
+#endif

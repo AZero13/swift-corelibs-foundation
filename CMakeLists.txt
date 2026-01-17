@@ -1,146 +1,253 @@
+##===----------------------------------------------------------------------===##
+##
+## This source file is part of the Swift open source project
+##
+## Copyright (c) 2024 Apple Inc. and the Swift project authors
+## Licensed under Apache License v2.0
+##
+## See LICENSE.txt for license information
+## See CONTRIBUTORS.md for the list of Swift project authors
+##
+## SPDX-License-Identifier: Apache-2.0
+##
+##===----------------------------------------------------------------------===##
 
-cmake_minimum_required(VERSION 3.15.1)
+cmake_minimum_required(VERSION 3.24)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules)
 
-# NOTE(compnerd) enable CMP0091 - select MSVC runtime based on
-# CMAKE_MSVC_RUNTIME_LIBRARY.  Requires CMake 3.15 or newer
-if(POLICY CMP0091)
-  cmake_policy(SET CMP0091 NEW)
+if(POLICY CMP0156)
+    # Deduplicate linked libraries where appropriate
+    cmake_policy(SET CMP0156 NEW)
+endif()
+
+if(POLICY CMP0157)
+    if(CMAKE_HOST_SYSTEM_NAME STREQUAL Windows AND CMAKE_SYSTEM_NAME STREQUAL Android)
+        # CMP0157 causes swift-collections to fail to compile when targetting
+        # Android on Windows due to swift-driver not being present during the
+        # toolchain build. Disable it for now.
+        cmake_policy(SET CMP0157 OLD)
+    else()
+        # New Swift build model: improved incremental build performance and LSP support
+        cmake_policy(SET CMP0157 NEW)
+    endif()
+endif()
+
+if (NOT DEFINED CMAKE_C_COMPILER)
+    set(CMAKE_C_COMPILER clang)
 endif()
 
 project(Foundation
-  LANGUAGES C Swift)
-enable_testing()
+    LANGUAGES C Swift)
 
-# NOTE(compnerd) default to /MD or /MDd by default based on the configuration.
-# Cache the variable to allow the user to alter the configuration.
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL" CACHE
-  STRING "MSVC Runtime Library")
+option(FOUNDATION_SWIFTPM_DEPS "build Windows SwiftPM dependencies via CMake" NO)
+if(FOUNDATION_SWIFTPM_DEPS)
+    include(WindowsSwiftPMDependencies)
+    _foundation_setup_windows_swiftpm_dependencies_target()
+    return()
+endif()
 
-if(CMAKE_VERSION VERSION_LESS 3.16.0)
-  if(NOT (CMAKE_SYSTEM_NAME STREQUAL Windows OR CMAKE_SYSTEM_NAME STREQUAL Darwin))
-    set(CMAKE_SHARED_LIBRARY_RUNTIME_Swift_FLAG "-Xlinker -rpath -Xlinker ")
-    set(CMAKE_SHARED_LIBRARY_RUNTIME_Swift_FLAG_SEP ":")
+if(NOT SWIFT_SYSTEM_NAME)
+  if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
+    set(SWIFT_SYSTEM_NAME macosx)
+  else()
+    set(SWIFT_SYSTEM_NAME "$<LOWER_CASE:${CMAKE_SYSTEM_NAME}>")
   endif()
-  # Workaround for CMake 3.15 which doesn't link libraries properly on Windows
-  set(CMAKE_LINK_LIBRARY_FLAG "-l")
 endif()
 
-if(CMAKE_VERSION VERSION_LESS 3.16 AND CMAKE_SYSTEM_NAME STREQUAL Windows)
-  set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-  set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-else()
-  set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-  set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+# Don't enable WMO on Windows due to linker failures
+if(NOT CMAKE_HOST_SYSTEM_NAME STREQUAL Windows)
+    # Enable whole module optimization for release builds & incremental for debug builds
+    if(POLICY CMP0157)
+        set(CMAKE_Swift_COMPILATION_MODE "$<IF:$<CONFIG:Release>,wholemodule,incremental>")
+    else()
+        add_compile_options($<$<AND:$<COMPILE_LANGUAGE:Swift>,$<CONFIG:Release>>:-wmo>)
+    endif()
 endif()
+
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_Swift_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/swift)
 
 option(BUILD_SHARED_LIBS "build shared libraries" ON)
-option(HAS_LIBDISPATCH_API "has libdispatch API" ON)
-option(BUILD_NETWORKING "build FoundationNetworking module" ON)
-option(BUILD_TOOLS "build tools" ON)
-option(NS_CURL_ASSUME_FEATURES_MISSING "Assume that optional libcurl features are missing rather than test the library's version, for build debugging" NO)
+option(BUILD_FULLY_STATIC "build fully static" NO)
 
-if(HAS_LIBDISPATCH_API)
-  find_package(dispatch CONFIG REQUIRED)
+# Optionally build tools (on by default) but only when building shared libraries
+if(BUILD_SHARED_LIBS)
+    option(FOUNDATION_BUILD_TOOLS "build tools" ON)
 endif()
 
-find_package(ICU COMPONENTS uc i18n REQUIRED OPTIONAL_COMPONENTS data)
+set(FOUNDATION_BUILD_NETWORKING_default ON)
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    # Networking is not supported on WASI
+    set(FOUNDATION_BUILD_NETWORKING_default OFF)
+endif()
+option(FOUNDATION_BUILD_NETWORKING "build FoundationNetworking"
+    ${FOUNDATION_BUILD_NETWORKING_default})
 
-include(SwiftSupport)
+set(CMAKE_POSITION_INDEPENDENT_CODE YES)
+
+# Fetchable dependencies
+include(FetchContent)
+if (_SwiftFoundationICU_SourceDIR)
+    FetchContent_Declare(SwiftFoundationICU
+        SOURCE_DIR ${_SwiftFoundationICU_SourceDIR})
+else()
+    FetchContent_Declare(SwiftFoundationICU
+        GIT_REPOSITORY https://github.com/apple/swift-foundation-icu.git
+        GIT_TAG 0.0.9)
+endif()
+
+if (_SwiftFoundation_SourceDIR)
+    FetchContent_Declare(SwiftFoundation
+        SOURCE_DIR ${_SwiftFoundation_SourceDIR})
+else()
+    FetchContent_Declare(SwiftFoundation
+        GIT_REPOSITORY https://github.com/apple/swift-foundation.git
+        GIT_TAG main)
+endif()
+FetchContent_MakeAvailable(SwiftFoundationICU SwiftFoundation)
+
+include(CheckLinkerFlag)
+include(CheckSymbolExists)
+
+check_linker_flag(C "LINKER:--build-id=sha1" LINKER_SUPPORTS_BUILD_ID)
+
+# Detect if the system libc defines symbols for these functions.
+# If it is not available, swift-corelibs-foundation has its own implementations
+# that will be used. If it is available, it should not redefine them.
+# Note: SwiftPM does not have the ability to introspect the contents of the SDK
+#       and therefore will always include these functions in the build and will
+#       cause build failures on platforms that define these functions.
+check_symbol_exists("strlcat" "string.h" HAVE_STRLCAT)
+check_symbol_exists("strlcpy" "string.h" HAVE_STRLCPY)
+check_symbol_exists("issetugid" "unistd.h" HAVE_ISSETUGID)
+add_compile_definitions(
+  $<$<AND:$<COMPILE_LANGUAGE:C>,$<BOOL:${HAVE_STRLCAT}>>:HAVE_STRLCAT>
+  $<$<AND:$<COMPILE_LANGUAGE:C>,$<BOOL:${HAVE_STRLCPY}>>:HAVE_STRLCPY>
+  $<$<AND:$<COMPILE_LANGUAGE:C>,$<BOOL:${HAVE_ISSETUGID}>>:HAVE_ISSETUGID>)
+
+if(CMAKE_SYSTEM_NAME STREQUAL Linux)
+  check_symbol_exists(sched_getaffinity "sched.h" HAVE_SCHED_GETAFFINITY)
+  add_compile_definitions($<$<COMPILE_LANGUAGE:C>:HAVE_SCHED_GETAFFINITY>)
+
+  # Pass -fno-omit-frame-pointer while compiling for better backtraces
+  add_compile_options(
+    "$<$<COMPILE_LANGUAGE:Swift>:SHELL:-Xcc -fno-omit-frame-pointer>"
+    "$<$<COMPILE_LANGUAGE:C,CXX>:-fno-omit-frame-pointer>")
+endif()
+
+# Precompute module triple for installation
+if(NOT SwiftFoundation_MODULE_TRIPLE)
+    set(module_triple_command "${CMAKE_Swift_COMPILER}" -print-target-info)
+    if(CMAKE_Swift_COMPILER_TARGET)
+        list(APPEND module_triple_command -target ${CMAKE_Swift_COMPILER_TARGET})
+    endif()
+    execute_process(COMMAND ${module_triple_command} OUTPUT_VARIABLE target_info_json)
+    string(JSON module_triple GET "${target_info_json}" "target" "moduleTriple")
+    set(SwiftFoundation_MODULE_TRIPLE "${module_triple}" CACHE STRING "swift module triple used for installed swiftmodule and swiftinterface files")
+    mark_as_advanced(SwiftFoundation_MODULE_TRIPLE)
+endif()
+
+# System dependencies
+
+# We know libdispatch is always unavailable on WASI
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    find_package(LibRT)
+    find_package(dispatch CONFIG)
+    if(NOT dispatch_FOUND)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+            set(DEFAULT_DISPATCH_INCLUDE_PATH "/usr/lib/swift")
+        elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+            set(DEFAULT_DISPATCH_INCLUDE_PATH "$ENV{SDKROOT}usr/include")
+        endif()
+        set(DISPATCH_INCLUDE_PATH "${DEFAULT_DISPATCH_INCLUDE_PATH}" CACHE STRING "A path to where you can find libdispatch headers")
+        message("-- dispatch_DIR not found, using dispatch from SDK at ${DISPATCH_INCLUDE_PATH}")
+        list(APPEND _Foundation_common_build_flags
+            "-I${DISPATCH_INCLUDE_PATH}"
+            "-I${DISPATCH_INCLUDE_PATH}/Block")
+    endif()
+endif()
+if(ANDROID)
+  # LibXml2 looks for the Threads package, so
+  # ensure that it doesn't try to use the `-pthread`
+  # flag on Android.
+  set(CMAKE_HAVE_LIBC_PTHREAD YES)
+endif()
+find_package(LibXml2 REQUIRED)
+if(FOUNDATION_BUILD_NETWORKING)
+    find_package(CURL REQUIRED)
+endif()
+
+# Common build flags (_CFURLSessionInterface, _CFXMLInterface, CoreFoundation)
+list(APPEND _Foundation_common_build_flags
+    "-DDEPLOYMENT_RUNTIME_SWIFT"
+    "-DCF_BUILDING_CF"
+    "-DHAVE_STRUCT_TIMESPEC"
+    "-Wno-shorten-64-to-32"
+    "-Wno-deprecated-declarations"
+    "-Wno-unreachable-code"
+    "-Wno-conditional-uninitialized"
+    "-Wno-unused-variable"
+    "-Wno-unused-function"
+    "-Wno-microsoft-enum-forward-reference"
+    "-Wno-int-conversion"
+    "-Wno-switch"
+    "-fblocks")
+
+if(NOT "${CMAKE_C_SIMULATE_ID}" STREQUAL "MSVC")
+    list(APPEND _Foundation_common_build_flags
+        "-fconstant-cfstrings"
+        "-fdollars-in-identifiers"
+        "-fno-common"
+        "-fcf-runtime-abi=swift")
+
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL OpenBSD)
+        list(APPEND _Foundation_common_build_flags
+            "-fexceptions")
+    endif()
+else()
+    list(APPEND _Foundation_common_build_flags
+        "/EHsc"
+        "/clang:-fcf-runtime-abi=swift")
+endif()
+
+set(CMAKE_INSTALL_REMOVE_ENVIRONMENT_RPATH ON)
+set(CMAKE_INSTALL_RPATH "$ORIGIN")
+if(CMAKE_SYSTEM_NAME MATCHES "OpenBSD|DragonFlyBSD")
+    add_link_options("LINKER:-z,origin")
+endif()
+
+if(CMAKE_BUILD_TYPE STREQUAL Debug)
+    list(APPEND _Foundation_common_build_flags
+        "-DDEBUG")
+endif()
+
+# Swift build flags (Foundation, FoundationNetworking, FoundationXML)
+set(_Foundation_swift_build_flags)
+list(APPEND _Foundation_swift_build_flags
+    "-swift-version 6"
+    "-DDEPLOYMENT_RUNTIME_SWIFT"
+    "-Xfrontend"
+    "-require-explicit-sendable")
+
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    # Enable wasi-libc emulation features
+    set(WASI_EMULATION_DEFS _WASI_EMULATED_MMAN _WASI_EMULATED_SIGNAL _WASI_EMULATED_PROCESS_CLOCKS)
+    foreach(def ${WASI_EMULATION_DEFS})
+        list(APPEND _Foundation_swift_build_flags "SHELL:-Xcc -D${def}")
+        list(APPEND _Foundation_common_build_flags "-D${def}")
+    endforeach()
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+    list(APPEND _Foundation_common_build_flags
+        "-D_GNU_SOURCE")
+endif()
+
 include(GNUInstallDirs)
-include(XCTest)
-
-set(CF_DEPLOYMENT_SWIFT YES CACHE BOOL "Build for Swift" FORCE)
-
-set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
-set(THREADS_PREFER_PTHREAD_FLAG OFF)
-find_package(Threads REQUIRED)
-
-set(SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
-set(BUILD_SHARED_LIBS NO)
-add_subdirectory(CoreFoundation EXCLUDE_FROM_ALL)
-set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
-
-# BlocksRuntime is already in libdispatch so it is only needed if libdispatch is
-# NOT being used
-if(NOT HAS_LIBDISPATCH_API)
-  add_subdirectory(Sources/BlocksRuntime)
-endif()
-
-# Setup include paths for uuid/uuid.h
-add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/uuid-headers/uuid/uuid.h
-  COMMAND
-    ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/uuid-headers/uuid
-  COMMAND
-    ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/Sources/UUID/uuid.h ${CMAKE_BINARY_DIR}/uuid-headers/uuid/uuid.h)
-add_custom_target(uuid-headers
-  DEPENDS ${CMAKE_BINARY_DIR}/uuid-headers/uuid/uuid.h)
-add_dependencies(CoreFoundation uuid-headers)
-target_include_directories(CoreFoundation PRIVATE
-  ${CMAKE_BINARY_DIR}/uuid-headers
-  ${CMAKE_CURRENT_BINARY_DIR}/CoreFoundation.framework/Headers)
+include(FoundationSwiftSupport)
 
 add_subdirectory(Sources)
-if(ENABLE_TESTING)
-  find_package(XCTest CONFIG REQUIRED)
-  add_subdirectory(Tests)
-endif()
-
-if(NOT BUILD_SHARED_LIBS)
-  set_property(GLOBAL APPEND PROPERTY Foundation_EXPORTS
-    CoreFoundation CFXMLInterface)
-
-  if(NOT HAS_LIBDISPATCH_API)
-    set_property(GLOBAL APPEND PROPERTY Foundation_EXPORTS
-      BlocksRuntime)
-  endif()
-
-  install(TARGETS CoreFoundation CFXMLInterface
-    DESTINATION lib/swift_static/$<LOWER_CASE:${CMAKE_SYSTEM_NAME}>)
-
-  if(BUILD_NETWORKING)
-    set_property(GLOBAL APPEND PROPERTY Foundation_EXPORTS
-      CFURLSessionInterface)
-    install(TARGETS CFURLSessionInterface
-      DESTINATION lib/swift_static/$<LOWER_CASE:${CMAKE_SYSTEM_NAME}>)
-  endif()
-endif()
-
-set(swift_lib_dir "lib/swift")
-if(NOT BUILD_SHARED_LIBS)
-  set(swift_lib_dir "lib/swift_static")
-endif()
-
-# TODO(compnerd) install as a Framework as that is how swift actually is built
-install(DIRECTORY
-          ${CMAKE_CURRENT_BINARY_DIR}/CoreFoundation.framework/Headers/
-        DESTINATION
-          ${swift_lib_dir}/CoreFoundation
-        FILES_MATCHING PATTERN "*.h")
-install(FILES
-          CoreFoundation/Base.subproj/$<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:static/>module.map
-        DESTINATION
-          ${swift_lib_dir}/CoreFoundation)
-install(DIRECTORY
-          ${CMAKE_CURRENT_BINARY_DIR}/CFURLSessionInterface.framework/Headers/
-        DESTINATION
-          ${swift_lib_dir}/CFURLSessionInterface
-        FILES_MATCHING PATTERN "*.h")
-install(FILES
-          CoreFoundation/URL.subproj/$<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:static/>module.map
-        DESTINATION
-          ${swift_lib_dir}/CFURLSessionInterface)
-install(DIRECTORY
-          ${CMAKE_CURRENT_BINARY_DIR}/CFXMLInterface.framework/Headers/
-        DESTINATION
-          ${swift_lib_dir}/CFXMLInterface
-        FILES_MATCHING PATTERN "*.h")
-install(FILES
-          CoreFoundation/Parsing.subproj/$<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:static/>module.map
-        DESTINATION
-          ${swift_lib_dir}/CFXMLInterface)
-
 add_subdirectory(cmake/modules)

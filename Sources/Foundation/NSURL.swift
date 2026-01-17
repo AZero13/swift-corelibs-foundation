@@ -19,7 +19,11 @@ internal let kCFURLWindowsPathStyle = CFURLPathStyle.cfurlWindowsPathStyle
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
-import Glibc
+@preconcurrency import Glibc
+#elseif canImport(Musl)
+@preconcurrency import Musl
+#elseif canImport(Bionic)
+@preconcurrency import Bionic
 #endif
 
 // NOTE: this represents PLATFORM_PATH_STYLE
@@ -77,7 +81,7 @@ internal func _pathComponents(_ path: String?) -> [String]? {
     return result
 }
 
-open class NSURL : NSObject, NSSecureCoding, NSCopying {
+open class NSURL : NSObject, NSSecureCoding, NSCopying, @unchecked Sendable {
     typealias CFType = CFURL
     internal var _base = _CFInfo(typeID: CFURLGetTypeID())
     internal var _flags : UInt32 = 0
@@ -484,9 +488,12 @@ open class NSURL : NSObject, NSSecureCoding, NSCopying {
 #if os(Windows)
         if let resolved = CFURLCopyAbsoluteURL(_cfObject),
                 let representation = CFURLCopyFileSystemPath(resolved, kCFURLWindowsPathStyle)?._swiftObject {
-            let buffer = UnsafeMutablePointer<Int8>.allocate(capacity: representation.count + 1)
-            representation.withCString { buffer.initialize(from: $0, count: representation.count + 1) }
-            buffer[representation.count] = 0
+            let buffer = representation.withCString {
+                let len = strlen($0)
+                let buffer = UnsafeMutablePointer<Int8>.allocate(capacity: len + 1)
+                buffer.initialize(from: $0, count: len + 1)
+                return buffer
+            }
             return UnsafePointer(buffer)
         }
 #else
@@ -554,9 +561,6 @@ open class NSURL : NSObject, NSSecureCoding, NSCopying {
     // TODO: should be `checkResourceIsReachableAndReturnError` with autoreleased error parameter.
     // Currently Autoreleased pointers is not supported on Linux.
     open func checkResourceIsReachable() throws -> Bool {
-#if os(WASI)
-        return false
-#else
         guard isFileURL,
             let path = path else {
                 throw NSError(domain: NSCocoaErrorDomain,
@@ -572,7 +576,6 @@ open class NSURL : NSObject, NSSecureCoding, NSCopying {
         }
         
         return true
-#endif
     }
 
     /* Returns a file path URL that refers to the same resource as a specified URL. File path URLs use a file system style path. An error will occur if the url parameter is not a file URL. A file reference URL's resource must exist and be reachable to be converted to a file path URL. Symbol is present in iOS 4, but performs no operation.
@@ -732,32 +735,32 @@ extension NSCharacterSet {
     // Predefined character sets for the six URL components and subcomponents which allow percent encoding. These character sets are passed to -stringByAddingPercentEncodingWithAllowedCharacters:.
     
     // Returns a character set containing the characters allowed in an URL's user subcomponent.
-    open class var urlUserAllowed: CharacterSet {
+    public class var urlUserAllowed: CharacterSet {
         return _CFURLComponentsGetURLUserAllowedCharacterSet()._swiftObject
     }
     
     // Returns a character set containing the characters allowed in an URL's password subcomponent.
-    open class var urlPasswordAllowed: CharacterSet {
+    public class var urlPasswordAllowed: CharacterSet {
         return _CFURLComponentsGetURLPasswordAllowedCharacterSet()._swiftObject
     }
     
     // Returns a character set containing the characters allowed in an URL's host subcomponent.
-    open class var urlHostAllowed: CharacterSet {
+    public class var urlHostAllowed: CharacterSet {
         return _CFURLComponentsGetURLHostAllowedCharacterSet()._swiftObject
     }
     
     // Returns a character set containing the characters allowed in an URL's path component. ';' is a legal path character, but it is recommended that it be percent-encoded for best compatibility with NSURL (-stringByAddingPercentEncodingWithAllowedCharacters: will percent-encode any ';' characters if you pass the URLPathAllowedCharacterSet).
-    open class var urlPathAllowed: CharacterSet {
+    public class var urlPathAllowed: CharacterSet {
         return _CFURLComponentsGetURLPathAllowedCharacterSet()._swiftObject
     }
     
     // Returns a character set containing the characters allowed in an URL's query component.
-    open class var urlQueryAllowed: CharacterSet {
+    public class var urlQueryAllowed: CharacterSet {
         return _CFURLComponentsGetURLQueryAllowedCharacterSet()._swiftObject
     }
     
     // Returns a character set containing the characters allowed in an URL's fragment component.
-    open class var urlFragmentAllowed: CharacterSet {
+    public class var urlFragmentAllowed: CharacterSet {
         return _CFURLComponentsGetURLFragmentAllowedCharacterSet()._swiftObject
     }
 }
@@ -765,12 +768,12 @@ extension NSCharacterSet {
 extension NSString {
     
     // Returns a new string made from the receiver by replacing all characters not in the allowedCharacters set with percent encoded characters. UTF-8 encoding is used to determine the correct percent encoded characters. Entire URL strings cannot be percent-encoded. This method is intended to percent-encode an URL component or subcomponent string, NOT the entire URL string. Any characters in allowedCharacters outside of the 7-bit ASCII range are ignored.
-    open func addingPercentEncoding(withAllowedCharacters allowedCharacters: CharacterSet) -> String? {
+    public func addingPercentEncoding(withAllowedCharacters allowedCharacters: CharacterSet) -> String? {
         return _CFStringCreateByAddingPercentEncodingWithAllowedCharacters(kCFAllocatorSystemDefault, self._cfObject, allowedCharacters._cfObject)._swiftObject
     }
     
     // Returns a new string made from the receiver by replacing all percent encoded sequences with the matching UTF-8 characters.
-    open var removingPercentEncoding: String? {
+    public var removingPercentEncoding: String? {
         return _CFStringCreateByRemovingPercentEncoding(kCFAllocatorSystemDefault, self._cfObject)?._swiftObject
     }
 }
@@ -779,7 +782,7 @@ extension NSURL {
     
     /* The following methods work on the path portion of a URL in the same manner that the NSPathUtilities methods on NSString do.
     */
-    open class func fileURL(withPathComponents components: [String]) -> URL? {
+    public class func fileURL(withPathComponents components: [String]) -> URL? {
         let path = NSString.path(withComponents: components)
         if components.last == "/" {
             return URL(fileURLWithPath: path, isDirectory: true)
@@ -825,11 +828,11 @@ extension NSURL {
         return result
     }
 
-    open var pathComponents: [String]? {
+    public var pathComponents: [String]? {
         return _pathComponents(path)
     }
     
-    open var lastPathComponent: String? {
+    public var lastPathComponent: String? {
         guard let fixedSelf = _pathByFixingSlashes() else {
             return nil
         }
@@ -840,7 +843,7 @@ extension NSURL {
         return String(fixedSelf.suffix(from: fixedSelf._startOfLastPathComponent))
     }
     
-    open var pathExtension: String? {
+    public var pathExtension: String? {
         guard let fixedSelf = _pathByFixingSlashes() else {
             return nil
         }
@@ -855,12 +858,12 @@ extension NSURL {
         }
     }
     
-    open func appendingPathComponent(_ pathComponent: String) -> URL? {
+    public func appendingPathComponent(_ pathComponent: String) -> URL? {
         var result : URL? = appendingPathComponent(pathComponent, isDirectory: false)
 
         // File URLs can't be handled on WASI without file system access
 #if !os(WASI)
-        // Since we are appending to a URL, path seperators should
+        // Since we are appending to a URL, path separators should
         // always be '/', even if we're on Windows
         if !pathComponent.hasSuffix("/") && isFileURL {
             if let urlWithoutDirectory = result {
@@ -875,31 +878,31 @@ extension NSURL {
         return result
     }
     
-    open func appendingPathComponent(_ pathComponent: String, isDirectory: Bool) -> URL? {
+    public func appendingPathComponent(_ pathComponent: String, isDirectory: Bool) -> URL? {
         return CFURLCreateCopyAppendingPathComponent(kCFAllocatorSystemDefault, _cfObject, pathComponent._cfObject, isDirectory)?._swiftObject
     }
     
-    open var deletingLastPathComponent: URL? {
+    public var deletingLastPathComponent: URL? {
         return CFURLCreateCopyDeletingLastPathComponent(kCFAllocatorSystemDefault, _cfObject)?._swiftObject
     }
     
-    open func appendingPathExtension(_ pathExtension: String) -> URL? {
+    public func appendingPathExtension(_ pathExtension: String) -> URL? {
         return CFURLCreateCopyAppendingPathExtension(kCFAllocatorSystemDefault, _cfObject, pathExtension._cfObject)?._swiftObject
     }
     
-    open var deletingPathExtension: URL? {
+    public var deletingPathExtension: URL? {
         return CFURLCreateCopyDeletingPathExtension(kCFAllocatorSystemDefault, _cfObject)?._swiftObject
     }
     
     /* The following methods work only on `file:` scheme URLs; for non-`file:` scheme URLs, these methods return the URL unchanged.
     */
-    open var standardizingPath: URL? {
-        // Documentation says it should expand initial tilde, but it does't do this on OS X.
+    public var standardizingPath: URL? {
+        // Documentation says it should expand initial tilde, but it doesn't do this on OS X.
         // In remaining cases it works just like URLByResolvingSymlinksInPath.
         return _resolveSymlinksInPath(excludeSystemDirs: true, preserveDirectoryFlag: true)
     }
     
-    open var resolvingSymlinksInPath: URL? {
+    public var resolvingSymlinksInPath: URL? {
         return _resolveSymlinksInPath(excludeSystemDirs: true)
     }
     
@@ -916,12 +919,8 @@ extension NSURL {
         if selfPath.isAbsolutePath {
             absolutePath = selfPath
         } else {
-#if os(WASI)
-            return nil
-#else
             let workingDir = FileManager.default.currentDirectoryPath
             absolutePath = workingDir._bridgeToObjectiveC().appendingPathComponent(selfPath)
-#endif
         }
 
 #if os(Windows)
@@ -969,20 +968,16 @@ extension NSURL {
 
             default:
                 resolvedPath = resolvedPath._bridgeToObjectiveC().appendingPathComponent(component)
-#if !os(WASI)
                 if let destination = FileManager.default._tryToResolveTrailingSymlinkInPath(resolvedPath) {
                     resolvedPath = destination
                 }
-#endif
             }
         }
 
         // It might be a responsibility of NSURL(fileURLWithPath:). Check it.
         var isExistingDirectory: ObjCBool = false
 
-#if !os(WASI)
         let _ = FileManager.default.fileExists(atPath: resolvedPath, isDirectory: &isExistingDirectory)
-#endif
 
         if excludeSystemDirs {
             resolvedPath = resolvedPath._tryToRemovePathPrefix("/private") ?? resolvedPath
@@ -1034,7 +1029,7 @@ extension NSURL {
 
 extension NSURL: _SwiftBridgeable {
     typealias SwiftType = URL
-    internal var _swiftObject: SwiftType { return URL(reference: self) }
+    internal var _swiftObject: SwiftType { return self as URL }
 }
 
 extension CFURL : _NSBridgeable, _SwiftBridgeable {
@@ -1047,7 +1042,7 @@ extension CFURL : _NSBridgeable, _SwiftBridgeable {
 extension URL : _NSBridgeable {
     typealias NSType = NSURL
     typealias CFType = CFURL
-    internal var _nsObject: NSType { return self.reference }
+    internal var _nsObject: NSType { return self as NSURL }
     internal var _cfObject: CFType { return _nsObject._cfObject }
 }
 
@@ -1061,11 +1056,10 @@ extension NSURL : _StructTypeBridgeable {
 
 // -----
 
-#if !os(WASI)
 internal func _CFSwiftURLCopyResourcePropertyForKey(_ url: CFTypeRef, _ key: CFString, _ valuePointer: UnsafeMutablePointer<Unmanaged<CFTypeRef>?>?, _ errorPointer: UnsafeMutablePointer<Unmanaged<CFError>?>?) -> _DarwinCompatibleBoolean {
     do {
         let key = URLResourceKey(rawValue: key._swiftObject)
-        let values = try unsafeBitCast(url, to: NSURL.self).resourceValues(forKeys: [ key ])
+        let values = try unsafeDowncast(url, to: NSURL.self).resourceValues(forKeys: [ key ])
         let value = values[key]
         
         if let value = value {
@@ -1078,7 +1072,7 @@ internal func _CFSwiftURLCopyResourcePropertyForKey(_ url: CFTypeRef, _ key: CFS
         return true
     } catch {
         if let errorPointer = errorPointer {
-            let nsError = (error as? NSError) ?? NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
+            let nsError = NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
             let cfError = Unmanaged.passRetained(nsError._cfObject)
             errorPointer.pointee = cfError
         }
@@ -1095,7 +1089,7 @@ internal func _CFSwiftURLCopyResourcePropertiesForKeys(_ url: CFTypeRef, _ keys:
             }
         }
         
-        let result = try unsafeBitCast(url, to: NSURL.self).resourceValues(forKeys: swiftKeys)
+        let result = try unsafeDowncast(url, to: NSURL.self).resourceValues(forKeys: swiftKeys)
         
         let finalDictionary = NSMutableDictionary()
         for entry in result {
@@ -1105,7 +1099,7 @@ internal func _CFSwiftURLCopyResourcePropertiesForKeys(_ url: CFTypeRef, _ keys:
         return .passRetained(finalDictionary._cfObject)
     } catch {
         if let errorPointer = errorPointer {
-            let nsError = (error as? NSError) ?? NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
+            let nsError = NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
             let cfError = Unmanaged.passRetained(nsError._cfObject)
             errorPointer.pointee = cfError
         }
@@ -1116,12 +1110,12 @@ internal func _CFSwiftURLCopyResourcePropertiesForKeys(_ url: CFTypeRef, _ keys:
 internal func _CFSwiftURLSetResourcePropertyForKey(_ url: CFTypeRef, _ key: CFString, _ value: CFTypeRef?, _ errorPointer: UnsafeMutablePointer<Unmanaged<CFError>?>?) -> _DarwinCompatibleBoolean {
     do {
         let key = URLResourceKey(rawValue: key._swiftObject)
-        try unsafeBitCast(url, to: NSURL.self).setResourceValue(__SwiftValue.fetch(value), forKey: key)
+        try unsafeDowncast(url, to: NSURL.self).setResourceValue(__SwiftValue.fetch(value), forKey: key)
         
         return true
     } catch {
         if let errorPointer = errorPointer {
-            let nsError = (error as? NSError) ?? NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
+            let nsError = NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
             let cfError = Unmanaged.passRetained(nsError._cfObject)
             errorPointer.pointee = cfError
         }
@@ -1140,11 +1134,11 @@ internal func _CFSwiftURLSetResourcePropertiesForKeys(_ url: CFTypeRef, _ proper
             }
         }
         
-        try unsafeBitCast(url, to: NSURL.self).setResourceValues(swiftValues)
+        try unsafeDowncast(url, to: NSURL.self).setResourceValues(swiftValues)
         return true
     } catch {
         if let errorPointer = errorPointer {
-            let nsError = (error as? NSError) ?? NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
+            let nsError = NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
             let cfError = Unmanaged.passRetained(nsError._cfObject)
             errorPointer.pointee = cfError
         }
@@ -1154,24 +1148,24 @@ internal func _CFSwiftURLSetResourcePropertiesForKeys(_ url: CFTypeRef, _ proper
 
 internal func _CFSwiftURLClearResourcePropertyCacheForKey(_ url: CFTypeRef, _ key: CFString) {
     let swiftKey = URLResourceKey(rawValue: key._swiftObject)
-    unsafeBitCast(url, to: NSURL.self).removeCachedResourceValue(forKey: swiftKey)
+    unsafeDowncast(url, to: NSURL.self).removeCachedResourceValue(forKey: swiftKey)
 }
 
 internal func _CFSwiftURLClearResourcePropertyCache(_ url: CFTypeRef) {
-    unsafeBitCast(url, to: NSURL.self).removeAllCachedResourceValues()
+    unsafeDowncast(url, to: NSURL.self).removeAllCachedResourceValues()
 }
 
 internal func _CFSwiftSetTemporaryResourceValueForKey(_ url: CFTypeRef, _ key: CFString, _ value: CFTypeRef) {
-    unsafeBitCast(url, to: NSURL.self).setTemporaryResourceValue(__SwiftValue.fetch(value), forKey: URLResourceKey(rawValue: key._swiftObject))
+    unsafeDowncast(url, to: NSURL.self).setTemporaryResourceValue(__SwiftValue.fetch(value), forKey: URLResourceKey(rawValue: key._swiftObject))
 }
 
 internal func _CFSwiftURLResourceIsReachable(_ url: CFTypeRef, _ errorPointer: UnsafeMutablePointer<Unmanaged<CFError>?>?) -> _DarwinCompatibleBoolean {
     do {
-        let reachable = try unsafeBitCast(url, to: NSURL.self).checkResourceIsReachable()
+        let reachable = try unsafeDowncast(url, to: NSURL.self).checkResourceIsReachable()
         return reachable ? true : false
     } catch {
         if let errorPointer = errorPointer {
-            let nsError = (error as? NSError) ?? NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
+            let nsError = NSError(domain: NSCocoaErrorDomain, code: CocoaError.featureUnsupported.rawValue)
             let cfError = Unmanaged.passRetained(nsError._cfObject)
             errorPointer.pointee = cfError
         }
@@ -1219,7 +1213,7 @@ fileprivate extension URLResourceValuesStorage {
             if let storage = fileAttributesStorage {
                 return storage
             } else {
-                let storage = try fm._attributesOfItem(atPath: path, includingPrivateAttributes: true)
+                let storage = try fm._attributesOfItemIncludingPrivate(atPath: path)
                 fileAttributesStorage = storage
                 return storage
             }
@@ -1325,7 +1319,7 @@ fileprivate extension URLResourceValuesStorage {
             case .isSystemImmutableKey:
                 result[key] = try attribute(._systemImmutable) as? Bool == true
             case .isUserImmutableKey:
-                result[key] = try attribute(._userImmutable) as? Bool == true
+                result[key] = try attribute(.immutable) as? Bool == true
             case .isHiddenKey:
                 result[key] = try attribute(._hidden) as? Bool == true
             case .hasHiddenExtensionKey:
@@ -1533,7 +1527,7 @@ fileprivate extension URLResourceValuesStorage {
                 switch key {
                     
                 case .isUserImmutableKey:
-                    try prepareToSetFileAttribute(._userImmutable, value: value as? Bool)
+                    try prepareToSetFileAttribute(.immutable, value: value as? Bool)
 
                 case .isSystemImmutableKey:
                     try prepareToSetFileAttribute(._systemImmutable, value: value as? Bool)
@@ -1571,7 +1565,7 @@ fileprivate extension URLResourceValuesStorage {
             
             // _setAttributes(…) needs to figure out the correct order to apply these attributes in, so set them all together at the end.
             if !attributesToSet.isEmpty {
-                try fm._setAttributes(attributesToSet, ofItemAtPath: path, includingPrivateAttributes: true)
+                try fm._setAttributesIncludingPrivate(attributesToSet, ofItemAtPath: path)
                 unsuccessfulKeys.formSymmetricDifference(keysThatSucceedBySettingAttributes)
             }
             
@@ -1595,7 +1589,6 @@ fileprivate extension URLResourceValuesStorage {
         }
     }
 }
-#endif
 
 // -----
 

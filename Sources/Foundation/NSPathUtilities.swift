@@ -10,6 +10,10 @@
 @_implementationOnly import CoreFoundation
 #if os(Windows)
 import WinSDK
+#elseif canImport(Android)
+@preconcurrency import Android
+#elseif os(WASI)
+import WASILibc
 #endif
 
 #if os(Windows)
@@ -19,66 +23,9 @@ let validPathSeps: [Character] = ["/"]
 #endif
 
 public func NSTemporaryDirectory() -> String {
-    func normalizedPath(with path: String) -> String {
-        if validPathSeps.contains(where: { path.hasSuffix(String($0)) }) {
-            return path
-        } else {
-            return path + String(validPathSeps.last!)
-        }
-    }
-#if os(Windows)
-    let cchLength: DWORD = GetTempPathW(0, nil)
-    var wszPath: [WCHAR] = Array<WCHAR>(repeating: 0, count: Int(cchLength + 1))
-    guard GetTempPathW(DWORD(wszPath.count), &wszPath) <= cchLength else {
-      preconditionFailure("GetTempPathW mutation race")
-    }
-    return normalizedPath(with: String(decodingCString: wszPath, as: UTF16.self).standardizingPath)
-#else
-#if canImport(Darwin)
-    let safe_confstr = { (name: Int32, buf: UnsafeMutablePointer<Int8>?, len: Int) -> Int in
-        // POSIX moment of weird: confstr() is one of those annoying APIs which
-        // can return zero for both error and non-error conditions, so the only
-        // way to disambiguate is to put errno in a known state before calling.
-        errno = 0
-        let result = confstr(name, buf, len)
-        
-        // result == 0 is only error if errno is not zero. But, if there was an
-        // error, bail; all possible errors from confstr() are Very Bad Things.
-        let err = errno // only read errno once in the failure case.
-        precondition(result > 0 || err == 0, "Unexpected confstr() error: \(err)")
-        
-        // This is extreme paranoia and should never happen; this would mean
-        // confstr() returned < 0, which would only happen for impossibly long
-        // sizes of value or long-dead versions of the OS.
-        assert(result >= 0, "confstr() returned impossible result: \(result)")
-
-        return result
-    }
-
-    let length: Int = safe_confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
-    if length > 0 {
-      var buffer: [Int8] = Array<Int8>(repeating: 0, count: length)
-      let final_length = safe_confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
-      
-      assert(length == final_length, "Value of _CS_DARWIN_USER_TEMP_DIR changed?")
-      if length > 0 && length < buffer.count {
-        return String(cString: buffer, encoding: .utf8)!
-      }
-    }
-#endif
-#if !os(WASI)
-    if let tmpdir = ProcessInfo.processInfo.environment["TMPDIR"] {
-        return normalizedPath(with: tmpdir)
-    }
-#endif
-#if os(Android)
-    // Bionic uses /data/local/tmp/ as temporary directory. TMPDIR is rarely
-    // defined.
-    return "/data/local/tmp/"
-#else
-    return "/tmp/"
-#endif
-#endif
+    FileManager.default.temporaryDirectory.withUnsafeFileSystemRepresentation {
+        String(cString: $0!)
+    } + String(validPathSeps[0])
 }
 
 extension String {
@@ -195,7 +142,6 @@ extension String {
         return temp
     }
     
-#if !os(WASI)
     internal func _tryToRemovePathPrefix(_ prefix: String) -> String? {
         guard self != prefix else {
             return nil
@@ -208,7 +154,6 @@ extension String {
         
         return nil
     }
-#endif
 }
 
 extension NSString {
@@ -338,7 +283,6 @@ extension NSString {
         return result._stringByFixingSlashes()
     }
 
-#if !os(WASI)
     public var expandingTildeInPath: String {
         guard hasPrefix("~") else {
             return _swiftObject
@@ -359,7 +303,6 @@ extension NSString {
         
         return result
     }
-#endif
 
 #if os(Windows)
     public var unixPath: String {
@@ -374,7 +317,6 @@ extension NSString {
     }
 #endif
     
-#if !os(WASI)
     public var standardizingPath: String {
 #if os(Windows)
         let expanded = unixPath.expandingTildeInPath
@@ -422,8 +364,6 @@ extension NSString {
         
         return resolvedPath
     }
-#endif
-    
     public func stringsByAppendingPaths(_ paths: [String]) -> [String] {
         if self == "" {
             return paths
@@ -431,7 +371,6 @@ extension NSString {
         return paths.map(appendingPathComponent)
     }
     
-#if !os(WASI)
     /// - Experiment: This is a draft API currently under consideration for official import into Foundation
     /// - Note: Since this API is under consideration it may be either removed or revised in the near future
     public func completePath(into outputName: inout String?, caseSensitive flag: Bool, matchesInto outputArray: inout [String], filterTypes: [String]?) -> Int {
@@ -534,7 +473,6 @@ extension NSString {
             return { $0.lowercased().hasPrefix(prefix) }
         }
     }
-#endif
     
     internal func _longestCommonPrefix(_ strings: [String], caseSensitive: Bool) -> String? {
         guard !strings.isEmpty else {
@@ -582,11 +520,9 @@ extension NSString {
         return path + "/"
     }
     
-#if !os(WASI)
     public var fileSystemRepresentation: UnsafePointer<Int8> {
         return FileManager.default.fileSystemRepresentation(withPath: self._swiftObject)
     }
-#endif
 
     public func getFileSystemRepresentation(_ cname: UnsafeMutablePointer<Int8>, maxLength max: Int) -> Bool {
 #if os(Windows)
@@ -597,7 +533,7 @@ extension NSString {
         return String(decodingCString: fsr, as: UTF16.self).withCString() {
             let chars = strnlen_s($0, max)
             guard chars < max else { return false }
-            cname.assign(from: $0, count: chars + 1)
+            cname.update(from: $0, count: chars + 1)
             return true
         }
 #else
@@ -615,7 +551,7 @@ extension NSString {
 
         // If we have a RFC8089 style path, e.g. `/[drive-letter]:/...`, drop
         // the leading '/', otherwise, a leading slash indicates a rooted path
-        // on the drive for the current working directoyr.
+        // on the drive for the current working directory.
         if fsr.count >= 3 {
             let index0 = fsr.startIndex
             let index1 = fsr.index(after: index0)
@@ -645,7 +581,7 @@ extension NSString {
         return fsr.withCString(encodedAs: UTF16.self) {
             let wchars = wcsnlen_s($0, max)
             guard wchars < max else { return false }
-            cname.assign(from: $0, count: wchars + 1)
+            cname.update(from: $0, count: wchars + 1)
             return true
         }
 #else
@@ -653,51 +589,6 @@ extension NSString {
 #endif
     }
 
-}
-
-#if !os(WASI)
-extension FileManager {
-    public enum SearchPathDirectory: UInt {
-        
-        case applicationDirectory // supported applications (Applications)
-        case demoApplicationDirectory // unsupported applications, demonstration versions (Demos)
-        case developerApplicationDirectory // developer applications (Developer/Applications). DEPRECATED - there is no one single Developer directory.
-        case adminApplicationDirectory // system and network administration applications (Administration)
-        case libraryDirectory // various documentation, support, and configuration files, resources (Library)
-        case developerDirectory // developer resources (Developer) DEPRECATED - there is no one single Developer directory.
-        case userDirectory // user home directories (Users)
-        case documentationDirectory // documentation (Documentation)
-        case documentDirectory // documents (Documents)
-        case coreServiceDirectory // location of CoreServices directory (System/Library/CoreServices)
-        case autosavedInformationDirectory // location of autosaved documents (Documents/Autosaved)
-        case desktopDirectory // location of user's desktop
-        case cachesDirectory // location of discardable cache files (Library/Caches)
-        case applicationSupportDirectory // location of application support files (plug-ins, etc) (Library/Application Support)
-        case downloadsDirectory // location of the user's "Downloads" directory
-        case inputMethodsDirectory // input methods (Library/Input Methods)
-        case moviesDirectory // location of user's Movies directory (~/Movies)
-        case musicDirectory // location of user's Music directory (~/Music)
-        case picturesDirectory // location of user's Pictures directory (~/Pictures)
-        case printerDescriptionDirectory // location of system's PPDs directory (Library/Printers/PPDs)
-        case sharedPublicDirectory // location of user's Public sharing directory (~/Public)
-        case preferencePanesDirectory // location of the PreferencePanes directory for use with System Preferences (Library/PreferencePanes)
-        case applicationScriptsDirectory // location of the user scripts folder for the calling application (~/Library/Application Scripts/code-signing-id)
-        case itemReplacementDirectory // For use with NSFileManager's URLForDirectory:inDomain:appropriateForURL:create:error:
-        case allApplicationsDirectory // all directories where applications can occur
-        case allLibrariesDirectory // all directories where resources can occur
-        case trashDirectory // location of Trash directory
-    }
-
-    public struct SearchPathDomainMask: OptionSet {
-        public let rawValue : UInt
-        public init(rawValue: UInt) { self.rawValue = rawValue }
-
-        public static let userDomainMask = SearchPathDomainMask(rawValue: 1) // user's home directory --- place to install user's personal items (~)
-        public static let localDomainMask = SearchPathDomainMask(rawValue: 2) // local to the current machine --- place to install items available to everyone on this machine (/Library)
-        public static let networkDomainMask = SearchPathDomainMask(rawValue: 4) // publically available location in the local area network --- place to install items available on the network (/Network)
-        public static let systemDomainMask = SearchPathDomainMask(rawValue: 8) // provided by Apple, unmodifiable (/System)
-        public static let allDomainsMask = SearchPathDomainMask(rawValue: 0x0ffff) // all domains: all of the above and future items
-    }
 }
 
 public func NSSearchPathForDirectoriesInDomains(_ directory: FileManager.SearchPathDirectory, _ domainMask: FileManager.SearchPathDomainMask, _ expandTilde: Bool) -> [String] {
@@ -727,17 +618,16 @@ public func NSSearchPathForDirectoriesInDomains(_ directory: FileManager.SearchP
 }
 
 public func NSHomeDirectory() -> String {
-    return NSHomeDirectoryForUser(nil)!
+    FileManager.default.homeDirectoryForCurrentUser.withUnsafeFileSystemRepresentation {
+        String(cString: $0!)
+    }
 }
 
 public func NSHomeDirectoryForUser(_ user: String?) -> String? {
-    let userName = user?._cfObject
-    guard let homeDir = CFCopyHomeDirectoryURLForUser(userName)?.takeRetainedValue() else {
-        return nil
+    guard let user else { return NSHomeDirectory() }
+    return FileManager.default.homeDirectory(forUser: user)?.withUnsafeFileSystemRepresentation {
+        String(cString: $0!)
     }
-    
-    let url: URL = homeDir._swiftObject
-    return url.path
 }
 
 public func NSUserName() -> String {
@@ -770,6 +660,10 @@ internal func _NSCreateTemporaryFile(_ filePath: String) throws -> (Int32, Strin
     }
     // Don't close h, fd is transferred ownership
     let fd = _open_osfhandle(intptr_t(bitPattern: h), 0)
+    return (fd, pathResult)
+#elseif os(WASI)
+    // WASI does not have temp directories
+    throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
 #else
     var template = URL(fileURLWithPath: filePath)
     
@@ -805,8 +699,8 @@ internal func _NSCreateTemporaryFile(_ filePath: String) throws -> (Int32, Strin
         close(fd)
         throw _NSErrorWithErrno(_errno, reading: false, path: pathResult)
     }
-#endif
     return (fd, pathResult)
+#endif
 }
 
 internal func _NSCleanupTemporaryFile(_ auxFilePath: String, _ filePath: String) throws  {
@@ -831,4 +725,3 @@ internal func _NSCleanupTemporaryFile(_ auxFilePath: String, _ filePath: String)
     })
 #endif
 }
-#endif

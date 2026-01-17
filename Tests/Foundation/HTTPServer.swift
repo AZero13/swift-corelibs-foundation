@@ -20,7 +20,9 @@ import Dispatch
 #elseif canImport(Darwin)
     import Darwin
 #elseif canImport(Glibc)
-    import Glibc
+    @preconcurrency import Glibc
+#elseif canImport(Android)
+    @preconcurrency import Android
 #endif
 
 #if !os(Windows)
@@ -40,8 +42,8 @@ private func debugLog(_ msg: String) {
 }
 
 public let globalDispatchQueue = DispatchQueue.global()
-public let dispatchQueueMake: (String) -> DispatchQueue = { DispatchQueue.init(label: $0) }
-public let dispatchGroupMake: () -> DispatchGroup = DispatchGroup.init
+public let dispatchQueueMake: @Sendable (String) -> DispatchQueue = { DispatchQueue.init(label: $0) }
+public let dispatchGroupMake: @Sendable () -> DispatchGroup = DispatchGroup.init
 
 struct _HTTPUtils {
     static let CRLF = "\r\n"
@@ -99,7 +101,7 @@ class _TCPSocket: CustomStringConvertible {
         listening = false
     }
 
-    init(port: UInt16?) throws {
+    init(port: UInt16?, backlog: Int32) throws {
         listening = true
         self.port = 0
 
@@ -124,7 +126,7 @@ class _TCPSocket: CustomStringConvertible {
         try socketAddress.withMemoryRebound(to: sockaddr.self, capacity: MemoryLayout<sockaddr>.size, { 
             let addr = UnsafePointer<sockaddr>($0)
             _ = try attempt("bind", valid: isZero, bind(_socket, addr, socklen_t(MemoryLayout<sockaddr>.size)))
-            _ = try attempt("listen", valid: isZero, listen(_socket, SOMAXCONN))
+            _ = try attempt("listen", valid: isZero, listen(_socket, backlog))
         })
 
         var actualSA = sockaddr_in()
@@ -185,13 +187,13 @@ class _TCPSocket: CustomStringConvertible {
 
         var buffer = [CChar](repeating: 0, count: 4096)
 #if os(Windows)
-        var dwNumberOfBytesRecieved: DWORD = 0;
+        var dwNumberOfBytesReceived: DWORD = 0
         try buffer.withUnsafeMutableBufferPointer {
             var wsaBuffer: WSABUF = WSABUF(len: ULONG($0.count), buf: $0.baseAddress)
             var flags: DWORD = 0
-            _ = try attempt("WSARecv", valid: { $0 != SOCKET_ERROR }, WSARecv(connectionSocket, &wsaBuffer, 1, &dwNumberOfBytesRecieved, &flags, nil, nil))
+            _ = try attempt("WSARecv", valid: { $0 != SOCKET_ERROR }, WSARecv(connectionSocket, &wsaBuffer, 1, &dwNumberOfBytesReceived, &flags, nil, nil))
         }
-        let length = Int(dwNumberOfBytesRecieved)
+        let length = Int(dwNumberOfBytesReceived)
 #else
         let length = try attempt("read", valid: { $0 >= 0 }, read(connectionSocket, &buffer, buffer.count))
 #endif
@@ -295,8 +297,8 @@ class _HTTPServer: CustomStringConvertible {
     let tcpSocket: _TCPSocket
     var port: UInt16 { tcpSocket.port }
 
-    init(port: UInt16?) throws {
-        tcpSocket = try _TCPSocket(port: port)
+    init(port: UInt16?, backlog: Int32 = SOMAXCONN) throws {
+        tcpSocket = try _TCPSocket(port: port, backlog: backlog)
     }
 
     init(socket: _TCPSocket) {
@@ -320,9 +322,9 @@ class _HTTPServer: CustomStringConvertible {
     public func request() throws -> _HTTPRequest {
 
         var reader = _SocketDataReader(socket: tcpSocket)
-        let headerData = try reader.readBlockSeparated(by: _HTTPUtils.CRLF2.data(using: .ascii)!)
+        let headerData = try reader.readBlockSeparated(by: _HTTPUtils.CRLF2.data(using: .utf8)!)
 
-        guard let headerString = String(bytes: headerData, encoding: .ascii) else {
+        guard let headerString = String(bytes: headerData, encoding: .utf8) else {
             throw InternalServerError.requestTooShort
         }
         var request = try _HTTPRequest(header: headerString)
@@ -347,14 +349,14 @@ class _HTTPServer: CustomStringConvertible {
 
             // There maybe some part of the body in the initial data
 
-            let bodySeparator = _HTTPUtils.CRLF.data(using: .ascii)!
+            let bodySeparator = _HTTPUtils.CRLF.data(using: .utf8)!
             var messageData = Data()
             var finished = false
 
             while !finished {
                 let chunkSizeData = try reader.readBlockSeparated(by: bodySeparator)
                 // Should now have <num bytes>\r\n
-                guard let number = String(bytes: chunkSizeData, encoding: .ascii), let chunkSize = Int(number, radix: 16) else {
+                guard let number = String(bytes: chunkSizeData, encoding: .utf8), let chunkSize = Int(number, radix: 16) else {
                      throw InternalServerError.requestTooShort
                 }
                 if chunkSize == 0 {
@@ -477,6 +479,18 @@ class _HTTPServer: CustomStringConvertible {
                 "Content-Length: 0\r\n" +
                 "Connection: keep-Alive\r\n" +
                 "\r\n").data(using: .utf8)!
+        try tcpSocket.writeRawData(responseData)
+    }
+
+    func respondWithAcceptEncoding(request: _HTTPRequest) throws {
+        var responseData: Data
+        if let acceptEncoding = request.getHeader(for: "Accept-Encoding") {
+            let content = acceptEncoding.data(using: .utf8)!
+            responseData = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=ISO-8859-1\r\nContent-Length: \(content.count)\r\n\r\n".data(using: .utf8)!
+            responseData.append(content)
+        } else {
+            responseData = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=ISO-8859-1\r\nContent-Length: 0\r\n\r\n".data(using: .utf8)!
+        }
         try tcpSocket.writeRawData(responseData)
     }
 }
@@ -676,7 +690,7 @@ public class TestURLSessionServer: CustomStringConvertible {
             // Serve this directly as binary data to avoid any String encoding conversions.
             if let url = testBundle().url(forResource: "NSString-ISO-8859-1-data", withExtension: "txt"),
                 let content = try? Data(contentsOf: url) {
-                var responseData = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=ISO-8859-1\r\nContent-Length: \(content.count)\r\n\r\n".data(using: .ascii)!
+                var responseData = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=ISO-8859-1\r\nContent-Length: \(content.count)\r\n\r\n".data(using: .utf8)!
                 responseData.append(content)
                 try httpServer.tcpSocket.writeRawData(responseData)
             } else {
@@ -688,6 +702,8 @@ public class TestURLSessionServer: CustomStringConvertible {
             try httpServer.respondWithUnauthorizedHeader()
         } else if req.uri.hasPrefix("/web-socket") {
             try handleWebSocketRequest(req)
+        } else if req.uri.hasPrefix("/accept-encoding") {
+            try httpServer.respondWithAcceptEncoding(request: req)
         } else {
             let response = try getResponse(request: req)
             try httpServer.respond(with: response)
@@ -848,6 +864,16 @@ public class TestURLSessionServer: CustomStringConvertible {
             return _HTTPResponse(response: .OK,
                                  headers: ["Content-Length: \(helloWorld.count)",
                                            "Content-Encoding: gzip"].joined(separator: _HTTPUtils.CRLF),
+                                 bodyData: helloWorld)
+        }
+
+        if uri == "/brotli-response" {
+            // This is "Hello World!" brotli encoded.
+            let helloWorld = Data([0x8B, 0x05, 0x80, 0x48, 0x65, 0x6C, 0x6C, 0x6F,
+                                   0x20, 0x57, 0x6F, 0x72, 0x6C, 0x64, 0x21, 0x03])
+            return _HTTPResponse(response: .OK,
+                                 headers: ["Content-Length: \(helloWorld.count)",
+                                           "Content-Encoding: br"].joined(separator: _HTTPUtils.CRLF),
                                  bodyData: helloWorld)
         }
         
@@ -1044,7 +1070,7 @@ public class TestURLSessionServer: CustomStringConvertible {
     
     private func statusCodeResponse(forRequest request: _HTTPRequest, statusCode: Int) throws -> _HTTPResponse {
         guard let bodyData = try? request.headersAsJSON() else {
-            return try _HTTPResponse(response: .SERVER_ERROR, body: "Cant convert headers to JSON object")
+            return try _HTTPResponse(response: .SERVER_ERROR, body: "Cannot convert headers to JSON object")
         }
 
         var response: _HTTPResponse
@@ -1082,7 +1108,7 @@ struct ServerError : Error {
 
 extension ServerError : CustomStringConvertible {
     var description: String {
-        let s = String(validatingUTF8: strerror(errno)) ?? ""
+        let s = String(validatingCString: strerror(errno)) ?? ""
         return "\(operation) failed: \(s) (\(_code))"
     }
 }
@@ -1094,15 +1120,32 @@ enum InternalServerError : Error {
     case badHeaders
 }
 
+extension LoopbackServerTest {
+    struct Options {
+        var serverBacklog: Int32
+        var isAsynchronous: Bool
+        
+        static let `default` = Options(serverBacklog: SOMAXCONN, isAsynchronous: true)
+    }
+}
 
 class LoopbackServerTest : XCTestCase {
     private static let staticSyncQ = DispatchQueue(label: "org.swift.TestFoundation.HTTPServer.StaticSyncQ")
 
-    private static var _serverPort: Int = -1
-    private static var _serverActive = false
-    private static var testServer: _HTTPServer? = nil
-
-
+    nonisolated(unsafe) private static var _serverPort: Int = -1
+    nonisolated(unsafe) private static var _serverActive = false
+    nonisolated(unsafe) private static var testServer: _HTTPServer? = nil
+    nonisolated(unsafe) private static var _options: Options = .default
+    
+    static var options: Options {
+        get {
+            return staticSyncQ.sync { _options }
+        }
+        set {
+            staticSyncQ.sync { _options = newValue }
+        }
+    }
+    
     static var serverPort: Int {
         get {
             return staticSyncQ.sync { _serverPort }
@@ -1119,26 +1162,42 @@ class LoopbackServerTest : XCTestCase {
 
     override class func setUp() {
         super.setUp()
+        Self.startServer()
+    }
 
-        var _serverPort = 0
+    override class func tearDown() {
+        Self.stopServer()
+        super.tearDown()
+    }
+    
+    static func startServer() {        
+        // Protected by dispatchGroup
+        nonisolated(unsafe) var _serverPort = 0
         let dispatchGroup = DispatchGroup()
 
-        func runServer() throws {
-            testServer = try _HTTPServer(port: nil)
+        @Sendable func runServer() throws {
+            testServer = try _HTTPServer(port: nil, backlog: options.serverBacklog)
             _serverPort = Int(testServer!.port)
             serverActive = true
             dispatchGroup.leave()
 
             while serverActive {
                 do {
-                    let httpServer = try testServer!.listen()
-                    globalDispatchQueue.async {
+                    nonisolated(unsafe) let httpServer = try testServer!.listen()
+                    
+                    @Sendable func handleRequest() {
                         let subServer = TestURLSessionServer(httpServer: httpServer)
                         do {
                             try subServer.readAndRespond()
                         } catch {
                             NSLog("readAndRespond: \(error)")
                         }
+                    }
+                    
+                    if options.isAsynchronous {
+                        globalDispatchQueue.async(execute: handleRequest)
+                    } else {
+                        handleRequest()
                     }
                 } catch {
                     if (serverActive) { // Ignore errors thrown on shutdown
@@ -1165,11 +1224,11 @@ class LoopbackServerTest : XCTestCase {
             fatalError("Timedout waiting for server to be ready")
         }
         serverPort = _serverPort
+        debugLog("Listening on \(serverPort)")
     }
-
-    override class func tearDown() {
+    
+    static func stopServer() {
         serverActive = false
         try? testServer?.stop()
-        super.tearDown()
     }
 }

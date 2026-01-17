@@ -9,13 +9,18 @@
 
 
 @_implementationOnly import CoreFoundation
+internal import Synchronization
 
 // Re-export Darwin and Glibc by importing Foundation
 // This mimics the behavior of the swift sdk overlay on Darwin
 #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
 @_exported import Darwin
-#elseif os(Linux) || os(Android) || CYGWIN || os(OpenBSD)
-@_exported import Glibc
+#elseif canImport(Glibc)
+@_exported @preconcurrency import Glibc
+#elseif canImport(Musl)
+@_exported @preconcurrency import Musl
+#elseif canImport(Bionic)
+@_exported @preconcurrency import Bionic
 #elseif os(WASI)
 @_exported import WASILibc
 #elseif os(Windows)
@@ -89,6 +94,9 @@ extension ObjCBool : CustomStringConvertible {
     }
 }
 #endif
+
+@available(*, unavailable)
+extension __NSCFType : @unchecked Sendable { }
 
 @usableFromInline
 internal class __NSCFType : NSObject {
@@ -178,9 +186,6 @@ internal func __CFInitializeSwift() {
     _CFRuntimeBridgeTypeToClass(CFDataGetTypeID(), unsafeBitCast(NSData.self, to: UnsafeRawPointer.self))
     _CFRuntimeBridgeTypeToClass(CFDateGetTypeID(), unsafeBitCast(NSDate.self, to: UnsafeRawPointer.self))
     _CFRuntimeBridgeTypeToClass(CFURLGetTypeID(), unsafeBitCast(NSURL.self, to: UnsafeRawPointer.self))
-    _CFRuntimeBridgeTypeToClass(CFCalendarGetTypeID(), unsafeBitCast(NSCalendar.self, to: UnsafeRawPointer.self))
-    _CFRuntimeBridgeTypeToClass(CFLocaleGetTypeID(), unsafeBitCast(NSLocale.self, to: UnsafeRawPointer.self))
-    _CFRuntimeBridgeTypeToClass(CFTimeZoneGetTypeID(), unsafeBitCast(NSTimeZone.self, to: UnsafeRawPointer.self))
     _CFRuntimeBridgeTypeToClass(CFCharacterSetGetTypeID(), unsafeBitCast(_NSCFCharacterSet.self, to: UnsafeRawPointer.self))
     _CFRuntimeBridgeTypeToClass(_CFKeyedArchiverUIDGetTypeID(), unsafeBitCast(_NSKeyedArchiverUID.self, to: UnsafeRawPointer.self))
     
@@ -295,19 +300,7 @@ internal func __CFInitializeSwift() {
     __CFSwiftBridge.NSData.increaseLengthBy = _CFSwiftDataIncreaseLength
     __CFSwiftBridge.NSData.appendBytes = _CFSwiftDataAppendBytes
     __CFSwiftBridge.NSData.replaceBytes = _CFSwiftDataReplaceBytes
-    
-    __CFSwiftBridge.NSCalendar.calendarIdentifier = _CFSwiftCalendarGetCalendarIdentifier
-    __CFSwiftBridge.NSCalendar.copyLocale = _CFSwiftCalendarCopyLocale
-    __CFSwiftBridge.NSCalendar.setLocale = _CFSwiftCalendarSetLocale
-    __CFSwiftBridge.NSCalendar.copyTimeZone = _CFSwiftCalendarCopyTimeZone
-    __CFSwiftBridge.NSCalendar.setTimeZone = _CFSwiftCalendarSetTimeZone
-    __CFSwiftBridge.NSCalendar.firstWeekday = _CFSwiftCalendarGetFirstWeekday
-    __CFSwiftBridge.NSCalendar.setFirstWeekday = _CFSwiftCalendarSetFirstWeekday
-    __CFSwiftBridge.NSCalendar.minimumDaysInFirstWeek = _CFSwiftCalendarGetMinimumDaysInFirstWeek
-    __CFSwiftBridge.NSCalendar.setMinimumDaysInFirstWeek = _CFSwiftCalendarSetMinimumDaysInFirstWeek
-    __CFSwiftBridge.NSCalendar.copyGregorianStartDate = _CFSwiftCalendarCopyGregorianStartDate
-    __CFSwiftBridge.NSCalendar.setGregorianStartDate = _CFSwiftCalendarSetGregorianStartDate
-    
+        
 //    __CFDefaultEightBitStringEncoding = UInt32(kCFStringEncodingUTF8)
     
 #if !os(WASI)
@@ -392,56 +385,61 @@ extension Array {
     internal typealias _DarwinCompatibleBoolean = Bool
 #endif
 
-public protocol _NSNonfileURLContentLoading: AnyObject {
+public protocol _NSNonfileURLContentLoading: AnyObject, Sendable {
     init()
     func contentsOf(url: URL) throws -> (result: NSData, textEncodingNameIfAvailable: String?)
 }
 
 
 internal enum _NSNonfileURLContentLoader {
-    static private(set) var external: _NSNonfileURLContentLoading?
+    static let external = Mutex<_NSNonfileURLContentLoading?>(nil)
     
     static var current: _NSNonfileURLContentLoading {
-        if let external = _NSNonfileURLContentLoader.external {
-            return external
-        } else {
-            guard let type = _typeByName(_SwiftFoundationNetworkingModuleName + "._NSNonfileURLContentLoader") as? _NSNonfileURLContentLoading.Type else {
-                fatalError("You must link or load module \(_SwiftFoundationNetworkingModuleName) to load non-file: URL content using String(contentsOf:…), Data(contentsOf:…), etc.")
+        external.withLock {
+            if let external = $0 {
+                return external
+            } else {
+                guard let type = _typeByName(_SwiftFoundationNetworkingModuleName + "._NSNonfileURLContentLoader") as? _NSNonfileURLContentLoading.Type else {
+                    fatalError("You must link or load module \(_SwiftFoundationNetworkingModuleName) to load non-file: URL content using String(contentsOf:…), Data(contentsOf:…), etc.")
+                }
+                
+                let result = type.init()
+                $0 = result
+                return result
             }
-            
-            let result = type.init()
-            _NSNonfileURLContentLoader.external = result
-            return result
         }
     }
 }
 
+@available(*, unavailable)
+extension _NSCFXMLBridgeForFoundationXMLUseOnly : Sendable { }
+
 public struct _NSCFXMLBridgeForFoundationXMLUseOnly {
-    public var originalBridge: UnsafeMutableRawPointer
-    public var CFArrayGetCount: UnsafeMutableRawPointer
-    public var CFArrayGetValueAtIndex: UnsafeMutableRawPointer
-    public var CFErrorCreate: UnsafeMutableRawPointer
-    public var CFStringCreateWithCString: UnsafeMutableRawPointer
-    public var CFStringCreateMutable: UnsafeMutableRawPointer
-    public var CFStringAppend: UnsafeMutableRawPointer
-    public var CFStringAppendCString: UnsafeMutableRawPointer
-    public var CFStringGetLength: UnsafeMutableRawPointer
-    public var CFStringGetMaximumSizeForEncoding: UnsafeMutableRawPointer
-    public var CFStringGetCString: UnsafeMutableRawPointer
-    public var CFDataCreateWithBytesNoCopy: UnsafeMutableRawPointer
-    public var CFRelease: UnsafeMutableRawPointer
-    public var CFStringCreateWithBytes: UnsafeMutableRawPointer
-    public var CFArrayCreateMutable: UnsafeMutableRawPointer
-    public var CFArrayAppendValue: UnsafeMutableRawPointer
-    public var CFDataGetLength: UnsafeMutableRawPointer
-    public var CFDataGetBytePtr: UnsafeMutableRawPointer
-    public var CFDictionaryCreateMutable: UnsafeMutableRawPointer
-    public var CFDictionarySetValue: UnsafeMutableRawPointer
-    public var kCFAllocatorSystemDefault: UnsafeMutableRawPointer
-    public var kCFAllocatorNull: UnsafeMutableRawPointer
-    public var kCFCopyStringDictionaryKeyCallBacks: UnsafeMutableRawPointer
-    public var kCFTypeDictionaryValueCallBacks: UnsafeMutableRawPointer
-    public var kCFErrorLocalizedDescriptionKey: UnsafeMutableRawPointer
+    public let originalBridge: UnsafeMutableRawPointer
+    public let CFArrayGetCount: UnsafeMutableRawPointer
+    public let CFArrayGetValueAtIndex: UnsafeMutableRawPointer
+    public let CFErrorCreate: UnsafeMutableRawPointer
+    public let CFStringCreateWithCString: UnsafeMutableRawPointer
+    public let CFStringCreateMutable: UnsafeMutableRawPointer
+    public let CFStringAppend: UnsafeMutableRawPointer
+    public let CFStringAppendCString: UnsafeMutableRawPointer
+    public let CFStringGetLength: UnsafeMutableRawPointer
+    public let CFStringGetMaximumSizeForEncoding: UnsafeMutableRawPointer
+    public let CFStringGetCString: UnsafeMutableRawPointer
+    public let CFDataCreateWithBytesNoCopy: UnsafeMutableRawPointer
+    public let CFRelease: UnsafeMutableRawPointer
+    public let CFStringCreateWithBytes: UnsafeMutableRawPointer
+    public let CFArrayCreateMutable: UnsafeMutableRawPointer
+    public let CFArrayAppendValue: UnsafeMutableRawPointer
+    public let CFDataGetLength: UnsafeMutableRawPointer
+    public let CFDataGetBytePtr: UnsafeMutableRawPointer
+    public let CFDictionaryCreateMutable: UnsafeMutableRawPointer
+    public let CFDictionarySetValue: UnsafeMutableRawPointer
+    public let kCFAllocatorSystemDefault: UnsafeMutableRawPointer
+    public let kCFAllocatorNull: UnsafeMutableRawPointer
+    public let kCFCopyStringDictionaryKeyCallBacks: UnsafeMutableRawPointer
+    public let kCFTypeDictionaryValueCallBacks: UnsafeMutableRawPointer
+    public let kCFErrorLocalizedDescriptionKey: UnsafeMutableRawPointer
     
     public init() {
         self.originalBridge = UnsafeMutableRawPointer(&__NSCFXMLBridgeUntyped)

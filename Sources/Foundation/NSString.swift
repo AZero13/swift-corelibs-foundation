@@ -7,8 +7,9 @@
 // See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 
-
+@_spi(SwiftCorelibsFoundation) @_exported import FoundationEssentials
 @_implementationOnly import CoreFoundation
+internal import Synchronization
 
 public typealias unichar = UInt16
 
@@ -25,11 +26,7 @@ func NSLocalizedString(_ key: String,
                        bundle: Bundle = Bundle.main,
                        value: String = "",
                        comment: String) -> String {
-#if os(WASI)
-    return key
-#else
     return bundle.localizedString(forKey: key, value: value, table: tableName)
-#endif
 }
 
 internal let kCFStringEncodingMacRoman =  CFStringBuiltInEncodings.macRoman.rawValue
@@ -59,7 +56,7 @@ internal let kCFStringNormalizationFormKC = CFStringNormalizationForm.KC
 
 extension NSString {
 
-    public struct EncodingConversionOptions : OptionSet {
+    public struct EncodingConversionOptions : OptionSet, Sendable {
         public let rawValue : UInt
         public init(rawValue: UInt) { self.rawValue = rawValue }
         
@@ -68,7 +65,7 @@ extension NSString {
         internal static let failOnPartialEncodingConversion = EncodingConversionOptions(rawValue: 1 << 20)
     }
 
-    public struct EnumerationOptions : OptionSet {
+    public struct EnumerationOptions : OptionSet, Sendable {
         public let rawValue : UInt
         public init(rawValue: UInt) { self.rawValue = rawValue }
         
@@ -91,28 +88,16 @@ extension NSString {
 }
 
 extension NSString {
-    public struct CompareOptions : OptionSet {
-        public let rawValue : UInt
-        public init(rawValue: UInt) { self.rawValue = rawValue }
-        
-        public static let caseInsensitive = CompareOptions(rawValue: 1)
-        public static let literal = CompareOptions(rawValue: 2)
-        public static let backwards = CompareOptions(rawValue: 4)
-        public static let anchored = CompareOptions(rawValue: 8)
-        public static let numeric = CompareOptions(rawValue: 64)
-        public static let diacriticInsensitive = CompareOptions(rawValue: 128)
-        public static let widthInsensitive = CompareOptions(rawValue: 256)
-        public static let forcedOrdering = CompareOptions(rawValue: 512)
-        public static let regularExpression = CompareOptions(rawValue: 1024)
-        
+    public typealias CompareOptions = String.CompareOptions
+}
+
+extension NSString.CompareOptions {
         internal func _cfValue(_ fixLiteral: Bool = false) -> CFStringCompareFlags {
             return contains(.literal) || !fixLiteral ? CFStringCompareFlags(rawValue: rawValue) : CFStringCompareFlags(rawValue: rawValue).union(.compareNonliteral)
         }
-    }
 }
 
-
-public struct StringTransform: Equatable, Hashable, RawRepresentable {
+public struct StringTransform: Equatable, Hashable, RawRepresentable, Sendable {
     typealias RawType = String
 
     public let rawValue: String
@@ -151,17 +136,18 @@ public struct StringTransform: Equatable, Hashable, RawRepresentable {
 }
 
 
+// NSCache is marked as non-Sendable, but it actually does have locking in our implementation
+fileprivate nonisolated(unsafe) let regularExpressionCache: NSCache<NSString, NSRegularExpression> = {
+    let cache = NSCache<NSString, NSRegularExpression>()
+    cache.name = "NSRegularExpressionCache"
+    cache.countLimit = 10
+    return cache
+}()
+
 internal func _createRegexForPattern(_ pattern: String, _ options: NSRegularExpression.Options) -> NSRegularExpression? {
-    struct local {
-        static let __NSRegularExpressionCache: NSCache<NSString, NSRegularExpression> = {
-            let cache = NSCache<NSString, NSRegularExpression>()
-            cache.name = "NSRegularExpressionCache"
-            cache.countLimit = 10
-            return cache
-        }()
-    }
+    
     let key = "\(options):\(pattern)"
-    if let regex = local.__NSRegularExpressionCache.object(forKey: key._nsObject) {
+    if let regex = regularExpressionCache.object(forKey: key._nsObject) {
         return regex
     }
 
@@ -169,36 +155,24 @@ internal func _createRegexForPattern(_ pattern: String, _ options: NSRegularExpr
         return nil
     }
 
-    local.__NSRegularExpressionCache.setObject(regex, forKey: key._nsObject)
+    regularExpressionCache.setObject(regex, forKey: key._nsObject)
+    
     return regex
 }
 
-internal func _bytesInEncoding(_ str: NSString, _ encoding: String.Encoding, _ fatalOnError: Bool, _ externalRep: Bool, _ lossy: Bool) -> UnsafePointer<Int8>? {
-    let theRange = NSRange(location: 0, length: str.length)
+// Caller must free, or leak, the pointer
+fileprivate func _allocateBytesInEncoding(_ str: NSString, _ encoding: String.Encoding) -> UnsafeMutableBufferPointer<Int8>? {
+    let theRange: NSRange = NSRange(location: 0, length: str.length)
     var cLength = 0
-    var used = 0
-    var options: NSString.EncodingConversionOptions = []
-    if externalRep {
-        options.formUnion(.externalRepresentation)
-    }
-    if lossy {
-        options.formUnion(.allowLossy)
-    }
-    if !str.getBytes(nil, maxLength: Int.max - 1, usedLength: &cLength, encoding: encoding.rawValue, options: options, range: theRange, remaining: nil) {
-        if fatalOnError {
-            fatalError("Conversion on encoding failed")
-        }
+    if !str.getBytes(nil, maxLength: Int.max - 1, usedLength: &cLength, encoding: encoding.rawValue, options: [], range: theRange, remaining: nil) {
         return nil
     }
     
-    let buffer = malloc(cLength + 1)!.bindMemory(to: Int8.self, capacity: cLength + 1)
-    if !str.getBytes(buffer, maxLength: cLength, usedLength: &used, encoding: encoding.rawValue, options: options, range: theRange, remaining: nil) {
-        fatalError("Internal inconsistency; previously claimed getBytes returned success but failed with similar invocation")
-    }
+    let buffer = UnsafeMutableBufferPointer<Int8>.allocate(capacity: cLength + 1)
+    buffer.initialize(repeating: 0)
+    _ = str.getBytes(buffer.baseAddress, maxLength: cLength, usedLength: nil, encoding: encoding.rawValue, options: [], range: theRange, remaining: nil)    
     
-    buffer.advanced(by: cLength).initialize(to: 0)
-    
-    return UnsafePointer(buffer) // leaked and should be autoreleased via a NSData backing but we cannot here
+    return buffer
 }
 
 internal func isALineSeparatorTypeCharacter(_ ch: unichar) -> Bool {
@@ -214,6 +188,9 @@ internal func isAParagraphSeparatorTypeCharacter(_ ch: unichar) -> Bool {
     }
     return ch == 0x0a || ch == 0x0d || ch == 0x2029
 }
+
+@available(*, unavailable)
+extension NSString : @unchecked Sendable { }
 
 open class NSString : NSObject, NSCopying, NSMutableCopying, NSSecureCoding, NSCoding {
     private let _cfinfo = _CFInfo(typeID: CFStringGetTypeID())
@@ -336,15 +313,7 @@ open class NSString : NSObject, NSCopying, NSMutableCopying, NSSecureCoding, NSC
     }
     
     internal func _fastCStringContents(_ nullTerminated: Bool) -> UnsafePointer<Int8>? {
-        guard !nullTerminated else {
-            // There is no way to fastly and safely retrieve a pointer to a null-terminated string from a String of Swift.
-            return nil
-        }
-        if type(of: self) == NSString.self || type(of: self) == NSMutableString.self {
-            if _storage._guts._isContiguousASCII {
-                return UnsafeRawPointer(_storage._guts.startASCII).assumingMemoryBound(to: Int8.self)
-            }
-        }
+        // There is no truly safe way to return an inner pointer for CFString here
         return nil
     }
 
@@ -824,7 +793,7 @@ extension NSString {
         return NSRange(location: start, length: parEnd - start)
     }
     
-    private enum EnumerateBy {
+    private enum EnumerateBy : Sendable {
         case lines
         case paragraphs
         case composedCharacterSequences
@@ -921,8 +890,13 @@ extension NSString {
         }
     }
     
+    @available(*, deprecated, message: "On platforms without Objective-C autorelease pools, use withCString instead")
     public var utf8String: UnsafePointer<Int8>? {
-        return _bytesInEncoding(self, .utf8, false, false, false)
+        guard let buffer = _allocateBytesInEncoding(self, .utf8) else {
+            return nil
+        }
+        // leaked. On Darwin, freed via an autorelease
+        return UnsafePointer<Int8>(buffer.baseAddress)
     }
     
     public var fastestEncoding: UInt {
@@ -979,8 +953,24 @@ extension NSString {
                                           0, nil, 0, nil) == length
     }
    
-    public func cString(using encoding: UInt) -> UnsafePointer<Int8>? { 
-        return _bytesInEncoding(self, String.Encoding(rawValue: encoding), false, false, false)
+    @available(*, deprecated, message: "On platforms without Objective-C autorelease pools, use withCString(encodedAs:_) instead")
+    public func cString(using encoding: UInt) -> UnsafePointer<Int8>? {
+        // leaked. On Darwin, freed via an autorelease
+        guard let buffer = _allocateBytesInEncoding(self,  String.Encoding(rawValue: encoding)) else {
+            return nil
+        }
+        // leaked. On Darwin, freed via an autorelease
+        return UnsafePointer<Int8>(buffer.baseAddress)
+    }
+
+    internal func _withCString<T>(using encoding: UInt, closure: (UnsafePointer<Int8>?) -> T) -> T {
+        let buffer = _allocateBytesInEncoding(self, String.Encoding(rawValue: encoding))
+        let result = closure(buffer?.baseAddress)
+        if let buffer {
+            buffer.deinitialize()
+            buffer.deallocate()
+        }
+        return result
     }
     
     public func getCString(_ buffer: UnsafeMutablePointer<Int8>, maxLength maxBufferCount: Int, encoding: UInt) -> Bool {
@@ -988,10 +978,15 @@ extension NSString {
         if type(of: self) == NSString.self || type(of: self) == NSMutableString.self {
             if _storage._guts._isContiguousASCII {
                 used = min(self.length, maxBufferCount - 1)
-                _storage._guts.startASCII.withMemoryRebound(to: Int8.self,
-                                                            capacity: used) {
-                    buffer.moveAssign(from: $0, count: used)
+                
+                // This is mutable, but since we just checked the contiguous behavior, should not copy
+                var copy = _storage
+                copy.withUTF8 {
+                    $0.withMemoryRebound(to: Int8.self) {
+                        buffer.update(from: $0.baseAddress!, count: used)
+                    }
                 }
+                
                 buffer.advanced(by: used).initialize(to: 0)
                 return true
             }
@@ -1042,35 +1037,34 @@ extension NSString {
         return convertedLen != len ? 0 : numBytes
     }
     
-    open class var availableStringEncodings: UnsafePointer<UInt> {
-        struct once {
-            static let encodings: UnsafePointer<UInt> = {
-                let cfEncodings = CFStringGetListOfAvailableEncodings()!
-                var idx = 0
-                var numEncodings = 0
-                
-                while cfEncodings.advanced(by: idx).pointee != kCFStringEncodingInvalidId {
-                    idx += 1
-                    numEncodings += 1
-                }
-                
-                let theEncodingList = UnsafeMutablePointer<String.Encoding.RawValue>.allocate(capacity: numEncodings + 1)
-                theEncodingList.advanced(by: numEncodings).pointee = 0 // Terminator
-                
-                numEncodings -= 1
-                while numEncodings >= 0 {
-                    theEncodingList.advanced(by: numEncodings).pointee =
-                        numericCast(CFStringConvertEncodingToNSStringEncoding(cfEncodings.advanced(by: numEncodings).pointee))
-                    numEncodings -= 1
-                }
-                
-                return UnsafePointer<UInt>(theEncodingList)
-            }()
+    private static nonisolated(unsafe) let _availableStringEncodings : UnsafePointer<UInt> = {
+        let cfEncodings = CFStringGetListOfAvailableEncodings()!
+        var idx = 0
+        var numEncodings = 0
+        
+        while cfEncodings.advanced(by: idx).pointee != kCFStringEncodingInvalidId {
+            idx += 1
+            numEncodings += 1
         }
-        return once.encodings
+        
+        let theEncodingList = UnsafeMutablePointer<String.Encoding.RawValue>.allocate(capacity: numEncodings + 1)
+        theEncodingList.advanced(by: numEncodings).pointee = 0 // Terminator
+        
+        numEncodings -= 1
+        while numEncodings >= 0 {
+            theEncodingList.advanced(by: numEncodings).pointee =
+                numericCast(CFStringConvertEncodingToNSStringEncoding(cfEncodings.advanced(by: numEncodings).pointee))
+            numEncodings -= 1
+        }
+        
+        return UnsafePointer<UInt>(theEncodingList)
+    }()
+    
+    public class var availableStringEncodings: UnsafePointer<UInt> {
+        return _availableStringEncodings
     }
     
-    open class func localizedName(of encoding: UInt) -> String {
+    public class func localizedName(of encoding: UInt) -> String {
         if let theString = CFStringGetNameOfEncoding(CFStringConvertNSStringEncodingToEncoding(numericCast(encoding))) {
             // TODO: read the localized version from the Foundation "bundle"
             return theString._swiftObject
@@ -1079,39 +1073,39 @@ extension NSString {
         return ""
     }
     
-    open class var defaultCStringEncoding: UInt {
+    public class var defaultCStringEncoding: UInt {
         return numericCast(CFStringConvertEncodingToNSStringEncoding(CFStringGetSystemEncoding()))
     }
     
-    open var decomposedStringWithCanonicalMapping: String {
+    public var decomposedStringWithCanonicalMapping: String {
         let string = CFStringCreateMutable(kCFAllocatorSystemDefault, 0)!
         CFStringReplaceAll(string, self._cfObject)
         CFStringNormalize(string, kCFStringNormalizationFormD)
         return string._swiftObject
     }
     
-    open var precomposedStringWithCanonicalMapping: String {
+    public var precomposedStringWithCanonicalMapping: String {
         let string = CFStringCreateMutable(kCFAllocatorSystemDefault, 0)!
         CFStringReplaceAll(string, self._cfObject)
         CFStringNormalize(string, kCFStringNormalizationFormC)
         return string._swiftObject
     }
     
-    open var decomposedStringWithCompatibilityMapping: String {
+    public var decomposedStringWithCompatibilityMapping: String {
         let string = CFStringCreateMutable(kCFAllocatorSystemDefault, 0)!
         CFStringReplaceAll(string, self._cfObject)
         CFStringNormalize(string, kCFStringNormalizationFormKD)
         return string._swiftObject
     }
     
-    open var precomposedStringWithCompatibilityMapping: String {
+    public var precomposedStringWithCompatibilityMapping: String {
         let string = CFStringCreateMutable(kCFAllocatorSystemDefault, 0)!
         CFStringReplaceAll(string, self._cfObject)
         CFStringNormalize(string, kCFStringNormalizationFormKC)
         return string._swiftObject
     }
     
-    open func components(separatedBy separator: String) -> [String] {
+    public func components(separatedBy separator: String) -> [String] {
         let len = length
         var lrange = range(of: separator, options: [], range: NSRange(location: 0, length: len))
         if lrange.length == 0 {
@@ -1134,7 +1128,7 @@ extension NSString {
         }
     }
     
-    open func components(separatedBy separator: CharacterSet) -> [String] {
+    public func components(separatedBy separator: CharacterSet) -> [String] {
         let len = length
         var range = rangeOfCharacter(from: separator, options: [], range: NSRange(location: 0, length: len))
         if range.length == 0 {
@@ -1157,7 +1151,7 @@ extension NSString {
         }
     }
     
-    open func trimmingCharacters(in set: CharacterSet) -> String {
+    public func trimmingCharacters(in set: CharacterSet) -> String {
         let len = length
         var buf = _NSStringBuffer(string: self, start: 0, end: len)
         while !buf.isAtEnd,
@@ -1184,7 +1178,7 @@ extension NSString {
         }
     }
     
-    open func padding(toLength newLength: Int, withPad padString: String, startingAt padIndex: Int) -> String {
+    public func padding(toLength newLength: Int, withPad padString: String, startingAt padIndex: Int) -> String {
         let len = length
         if newLength <= len {	// The simple cases (truncation)
             return newLength == len ? _swiftObject : substring(with: NSRange(location: 0, length: newLength))
@@ -1202,7 +1196,7 @@ extension NSString {
         return mStr._swiftObject
     }
     
-    open func folding(options: CompareOptions = [], locale: Locale?) -> String {
+    public func folding(options: CompareOptions = [], locale: Locale?) -> String {
         let string = CFStringCreateMutable(kCFAllocatorSystemDefault, 0)!
         CFStringReplaceAll(string, self._cfObject)
         CFStringFold(string, options._cfValue(), locale?._cfObject)
@@ -1218,7 +1212,7 @@ extension NSString {
         return ""
     }
     
-    open func replacingOccurrences(of target: String, with replacement: String, options: CompareOptions = [], range searchRange: NSRange) -> String {
+    public func replacingOccurrences(of target: String, with replacement: String, options: CompareOptions = [], range searchRange: NSRange) -> String {
         if options.contains(.regularExpression) {
             return _stringByReplacingOccurrencesOfRegularExpressionPattern(target, withTemplate: replacement, options: options, range: searchRange)
         }
@@ -1230,17 +1224,17 @@ extension NSString {
         }
     }
     
-    open func replacingOccurrences(of target: String, with replacement: String) -> String {
+    public func replacingOccurrences(of target: String, with replacement: String) -> String {
         return replacingOccurrences(of: target, with: replacement, options: [], range: NSRange(location: 0, length: length))
     }
     
-    open func replacingCharacters(in range: NSRange, with replacement: String) -> String {
+    public func replacingCharacters(in range: NSRange, with replacement: String) -> String {
         let str = mutableCopy(with: nil) as! NSMutableString
         str.replaceCharacters(in: range, with: replacement)
         return str._swiftObject
     }
     
-    open func applyingTransform(_ transform: StringTransform, reverse: Bool) -> String? {
+    public func applyingTransform(_ transform: StringTransform, reverse: Bool) -> String? {
         let string = CFStringCreateMutable(kCFAllocatorSystemDefault, 0)!
         CFStringReplaceAll(string, _cfObject)
         if (CFStringTransform(string, nil, transform.rawValue._cfObject, reverse)) {
@@ -1272,17 +1266,30 @@ extension NSString {
         data = mData
     }
     
+    #if os(WASI)
+    @available(*, unavailable, message: "WASI does not support atomic file-writing as it does not have temporary directories")
+    #endif
     internal func _writeTo(_ url: URL, _ useAuxiliaryFile: Bool, _ enc: UInt) throws {
+        #if os(WASI)
+        throw CocoaError(.featureUnsupported)
+        #else
         var data = Data()
         try _getExternalRepresentation(&data, url, enc)
         try data.write(to: url, options: useAuxiliaryFile ? .atomic : [])
+        #endif
     }
     
-    open func write(to url: URL, atomically useAuxiliaryFile: Bool, encoding enc: UInt) throws {
+    #if os(WASI)
+    @available(*, unavailable, message: "WASI does not support atomic file-writing as it does not have temporary directories")
+    #endif
+    public func write(to url: URL, atomically useAuxiliaryFile: Bool, encoding enc: UInt) throws {
         try _writeTo(url, useAuxiliaryFile, enc)
     }
     
-    open func write(toFile path: String, atomically useAuxiliaryFile: Bool, encoding enc: UInt) throws {
+    #if os(WASI)
+    @available(*, unavailable, message: "WASI does not support atomic file-writing as it does not have temporary directories")
+    #endif
+    public func write(toFile path: String, atomically useAuxiliaryFile: Bool, encoding enc: UInt) throws {
         try _writeTo(URL(fileURLWithPath: path), useAuxiliaryFile, enc)
     }
     
@@ -1295,7 +1302,7 @@ extension NSString {
     }
     
     public convenience init?(utf8String nullTerminatedCString: UnsafePointer<Int8>) {
-        guard let str = String(validatingUTF8: nullTerminatedCString) else { return nil }
+        guard let str = String(validatingCString: nullTerminatedCString) else { return nil }
         self.init(str)
     }
     
@@ -1307,8 +1314,13 @@ extension NSString {
     public convenience init(format: String, locale: AnyObject?, arguments argList: CVaListPointer) {
         let str: CFString
         if let loc = locale {
-            if type(of: loc) === NSLocale.self || type(of: loc) === NSDictionary.self {
-                str = CFStringCreateWithFormatAndArguments(kCFAllocatorSystemDefault, unsafeBitCast(loc, to: CFDictionary.self), format._cfObject, argList)
+            if type(of: loc) === NSLocale.self {
+                // Create a CFLocaleRef
+                let cf = (loc as! NSLocale)._cfObject
+                str = CFStringCreateWithFormatAndArguments(kCFAllocatorSystemDefault, unsafeBitCast(cf, to: CFDictionary.self), format._cfObject, argList)
+            } else if type(of: loc) === NSDictionary.self {
+                let dict = (loc as! NSDictionary)._cfObject
+                str = CFStringCreateWithFormatAndArguments(kCFAllocatorSystemDefault, dict, format._cfObject, argList)
             } else {
                 fatalError("locale parameter must be a NSLocale or a NSDictionary")
             }
@@ -1678,3 +1690,14 @@ extension String : CVarArg, _CVarArgObject {
     }
 }
 #endif
+
+// Upcall from swift-foundation for conversion of less frequently-used encodings
+@_dynamicReplacement(for: _cfStringEncodingConvert(string:using:allowLossyConversion:))
+private func _cfStringEncodingConvert_corelibs_foundation(string: String, using encoding: UInt, allowLossyConversion: Bool) -> Data? {
+    return (string as NSString).data(using: encoding, allowLossyConversion: allowLossyConversion)
+}
+
+@_dynamicReplacement(for: _cfMakeStringFromBytes(_:encoding:))
+private func _cfMakeStringFromBytes_corelibs_foundation(_ bytes: UnsafeBufferPointer<UInt8>, encoding: UInt) -> String? {
+    return NSString(bytes: bytes.baseAddress!, length: bytes.count, encoding: encoding) as? String
+}

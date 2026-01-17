@@ -60,6 +60,9 @@ fileprivate extension String {
     static let characterSetNewIsInvertedKey = "NSIsInverted2"
 }
 
+@available(*, unavailable)
+extension NSCharacterSet : @unchecked Sendable { }
+
 open class NSCharacterSet : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
     typealias CFType = CFCharacterSet
     private var _base = _CFInfo(typeID: CFCharacterSetGetTypeID())
@@ -184,7 +187,6 @@ open class NSCharacterSet : NSObject, NSCopying, NSMutableCopying, NSSecureCodin
         _CFCharacterSetInitWithBitmapRepresentation(_cfMutableObject, data._cfObject)
     }
     
-#if !os(WASI)
     public convenience init?(contentsOfFile fName: String) {
         do {
            let data = try Data(contentsOf: URL(fileURLWithPath: fName))
@@ -330,7 +332,6 @@ open class NSCharacterSet : NSObject, NSCopying, NSMutableCopying, NSSecureCodin
             aCoder.encode(true, forKey: .characterSetIsInvertedKey)
         }
     }
-#endif
     
     open func characterIsMember(_ aCharacter: unichar) -> Bool {
         return longCharacterIsMember(UInt32(aCharacter))
@@ -370,9 +371,9 @@ open class NSCharacterSet : NSObject, NSCopying, NSMutableCopying, NSSecureCodin
     
     open func copy(with zone: NSZone? = nil) -> Any {
         if type(of: self) == NSCharacterSet.self || type(of: self) == NSMutableCharacterSet.self {
-            return _CFCharacterSetCreateCopy(kCFAllocatorSystemDefault, self._cfObject)
+            return _CFCharacterSetCreateCopy(kCFAllocatorSystemDefault, self._cfObject)._nsObject
         } else if type(of: self) == _NSCFCharacterSet.self {
-            return CFCharacterSetCreateCopy(kCFAllocatorSystemDefault, self._cfObject) as Any
+            return CFCharacterSetCreateCopy(kCFAllocatorSystemDefault, self._cfObject)._nsObject
         } else {
             NSRequiresConcreteImplementation()
         }

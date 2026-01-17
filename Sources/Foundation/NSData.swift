@@ -11,49 +11,16 @@
 #if !os(WASI)
 import Dispatch
 #endif
+#if canImport(Android)
+@preconcurrency import Android
+#endif
 
 extension NSData {
-    public struct ReadingOptions : OptionSet {
-        public let rawValue : UInt
-        public init(rawValue: UInt) { self.rawValue = rawValue }
-        
-        public static let mappedIfSafe = ReadingOptions(rawValue: UInt(1 << 0))
-        public static let uncached = ReadingOptions(rawValue: UInt(1 << 1))
-        public static let alwaysMapped = ReadingOptions(rawValue: UInt(1 << 2))
-    }
-
-    public struct WritingOptions : OptionSet {
-        public let rawValue : UInt
-        public init(rawValue: UInt) { self.rawValue = rawValue }
-        
-        public static let atomic = WritingOptions(rawValue: UInt(1 << 0))
-        public static let withoutOverwriting = WritingOptions(rawValue: UInt(1 << 1))
-    }
-
-    public struct SearchOptions : OptionSet {
-        public let rawValue : UInt
-        public init(rawValue: UInt) { self.rawValue = rawValue }
-        
-        public static let backwards = SearchOptions(rawValue: UInt(1 << 0))
-        public static let anchored = SearchOptions(rawValue: UInt(1 << 1))
-    }
-
-    public struct Base64EncodingOptions : OptionSet {
-        public let rawValue : UInt
-        public init(rawValue: UInt) { self.rawValue = rawValue }
-        
-        public static let lineLength64Characters = Base64EncodingOptions(rawValue: UInt(1 << 0))
-        public static let lineLength76Characters = Base64EncodingOptions(rawValue: UInt(1 << 1))
-        public static let endLineWithCarriageReturn = Base64EncodingOptions(rawValue: UInt(1 << 4))
-        public static let endLineWithLineFeed = Base64EncodingOptions(rawValue: UInt(1 << 5))
-    }
-
-    public struct Base64DecodingOptions : OptionSet {
-        public let rawValue : UInt
-        public init(rawValue: UInt) { self.rawValue = rawValue }
-        
-        public static let ignoreUnknownCharacters = Base64DecodingOptions(rawValue: UInt(1 << 0))
-    }
+    public typealias ReadingOptions = Data.ReadingOptions
+    public typealias WritingOptions = Data.WritingOptions
+    public typealias SearchOptions = Data.SearchOptions
+    public typealias Base64EncodingOptions = Data.Base64EncodingOptions
+    public typealias Base64DecodingOptions = Data.Base64DecodingOptions
 }
 
 private final class _NSDataDeallocator {
@@ -66,6 +33,12 @@ private let __kCFGrowable: CFOptionFlags = 0x02
 private let __kCFBytesInline: CFOptionFlags = 2
 private let __kCFUseAllocator: CFOptionFlags = 3
 private let __kCFDontDeallocate: CFOptionFlags = 4
+
+@available(*, unavailable)
+extension NSData : @unchecked Sendable { }
+
+@available(*, unavailable)
+extension NSData.NSDataReadResult : Sendable { }
 
 open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
     typealias CFType = CFData
@@ -151,7 +124,6 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
         _init(bytes: bytes, length: length, copy: false, deallocator: deallocator)
     }
 
-#if !os(WASI)
     /// Initializes a data object with the contents of the file at a given path.
     public init(contentsOfFile path: String, options readOptionsMask: ReadingOptions = []) throws {
         super.init()
@@ -174,7 +146,6 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
             return nil
         }
     }
-#endif
 
     /// Initializes a data object with the contents of another data object.
     public init(data: Data) {
@@ -184,7 +155,6 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
         }
     }
 
-#if !os(WASI)
     /// Initializes a data object with the data from the location specified by a given URL.
     public init(contentsOf url: URL, options readOptionsMask: ReadingOptions = []) throws {
         super.init()
@@ -223,7 +193,6 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
             return try _NSNonfileURLContentLoader.current.contentsOf(url: url)
         }
     }
-#endif
 
     /// Initializes a data object with the given Base64 encoded string.
     public init?(base64Encoded base64String: String, options: Base64DecodingOptions = []) {
@@ -283,7 +252,7 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
     open var bytes: UnsafeRawPointer {
         requireFunnelOverridden()
         guard let bytePtr = CFDataGetBytePtr(_cfObject) else {
-            //This could occure on empty data being encoded.
+            //This could occur on empty data being encoded.
             //TODO: switch with nil when signature is fixed
             return UnsafeRawPointer(bitPattern: 0x7f00dead)! //would not result in 'nil unwrapped optional'
         }
@@ -439,7 +408,6 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
         }
     }
 
-#if !os(WASI)
     internal static func readBytesFromFileWithExtendedAttributes(_ path: String, options: ReadingOptions) throws -> NSDataReadResult {
         guard let handle = FileHandle(path: path, flags: O_RDONLY, createMode: 0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: nil)
@@ -462,9 +430,16 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
         }
 
         let fm = FileManager.default
-        let permissions = try? fm._permissionsOfItem(atPath: path)
-
-        if writeOptionsMask.contains(.atomic) {
+#if os(WASI)
+        // WASI does not have permission concept
+        let permissions: Int? = nil
+        // ReadingOptions.atomic won't be specified on WASI as it's marked unavailable
+        var atomicWrite: Bool { false }
+#else
+        let permissions = try? fm.attributesOfItem(atPath: path)[.posixPermissions] as? Int
+        let atomicWrite = writeOptionsMask.contains(.atomic)
+#endif
+        if atomicWrite {
             let (newFD, auxFilePath) = try _NSCreateTemporaryFile(path)
             let fh = FileHandle(fileDescriptor: newFD, closeOnDealloc: true)
             do {
@@ -488,14 +463,20 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
             }
 
             // NOTE: Each flag such as `S_IRUSR` may be literal depends on the system.
-            // Without explicity type them as `Int`, type inference will not complete in reasonable time
+            // Without explicitly type them as `Int`, type inference will not complete in reasonable time
             // and the compiler will throw an error.
 #if os(Windows)
             let createMode = Int(ucrt.S_IREAD) | Int(ucrt.S_IWRITE)
 #elseif canImport(Darwin)
             let createMode = Int(S_IRUSR) | Int(S_IWUSR) | Int(S_IRGRP) | Int(S_IWGRP) | Int(S_IROTH) | Int(S_IWOTH)
-#else
+#elseif canImport(Glibc)
             let createMode = Int(Glibc.S_IRUSR) | Int(Glibc.S_IWUSR) | Int(Glibc.S_IRGRP) | Int(Glibc.S_IWGRP) | Int(Glibc.S_IROTH) | Int(Glibc.S_IWOTH)
+#elseif canImport(Musl)
+            let createMode = Int(Musl.S_IRUSR) | Int(Musl.S_IWUSR) | Int(Musl.S_IRGRP) | Int(Musl.S_IWGRP) | Int(Musl.S_IROTH) | Int(Musl.S_IWOTH)
+#elseif canImport(WASILibc)
+            let createMode = Int(WASILibc.S_IRUSR) | Int(WASILibc.S_IWUSR) | Int(WASILibc.S_IRGRP) | Int(WASILibc.S_IWGRP) | Int(WASILibc.S_IROTH) | Int(WASILibc.S_IWOTH)
+#elseif canImport(Android)
+            let createMode = Int(Android.S_IRUSR) | Int(Android.S_IWUSR) | Int(Android.S_IRGRP) | Int(Android.S_IWGRP) | Int(Android.S_IROTH) | Int(Android.S_IWOTH)
 #endif
             guard let fh = FileHandle(path: path, flags: flags, createMode: createMode) else {
                 throw _NSErrorWithErrno(errno, reading: false, path: path)
@@ -509,22 +490,38 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
 
     /// Writes the data object's bytes to the file specified by a given path.
     /// NOTE: the 'atomically' flag is ignored if the url is not of a type the supports atomic writes
+    #if os(WASI)
+    @available(*, unavailable, message: "WASI does not support atomic file-writing as it does not have temporary directories")
+    #endif
     open func write(toFile path: String, atomically useAuxiliaryFile: Bool) -> Bool {
+        #if os(WASI)
+        // WASI does not support atomic file-writing as it does not have temporary directories
+        return false
+        #else
         do {
             try write(toFile: path, options: useAuxiliaryFile ? .atomic : [])
         } catch {
             return false
         }
         return true
+        #endif
     }
 
     /// Writes the data object's bytes to the location specified by a given URL.
     /// NOTE: the 'atomically' flag is ignored if the url is not of a type the supports atomic writes
+    #if os(WASI)
+    @available(*, unavailable, message: "WASI does not support atomic file-writing as it does not have temporary directories")
+    #endif
     open func write(to url: URL, atomically: Bool) -> Bool {
+        #if os(WASI)
+        // WASI does not support atomic file-writing as it does not have temporary directories
+        return false
+        #else
         if url.isFileURL {
             return write(toFile: url.path, atomically: atomically)
         }
         return false
+        #endif
     }
 
     ///    Writes the data object's bytes to the location specified by a given URL.
@@ -543,7 +540,6 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
         }
         try write(toFile: url.path, options: writeOptionsMask)
     }
-#endif
 
     // MARK: - Bytes
     /// Copies a number of bytes from the start of the data object into a given buffer.
@@ -579,7 +575,7 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
             return Data()
         }
         if range.location == 0 && range.length == self.length {
-            return Data(referencing: self)
+            return Data(self)
         }
         let p = self.bytes.advanced(by: range.location).bindMemory(to: UInt8.self, capacity: range.length)
         return Data(bytes: p, count: range.length)
@@ -892,7 +888,7 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
                 inputIndex += 3
             } else {
                 // This runs once at the end of there were 1 or 2 bytes left, byte1 having already been read.
-                // Read byte2 or 0 if there isnt another byte
+                // Read byte2 or 0 if there isn't another byte
                 let byte2 = bytesLeft == 1 ? 0 : dataBuffer[inputIndex + 1]
                 var value = UInt16(byte1 & 0x3) << 8
                 value |= UInt16(byte2)
@@ -944,7 +940,7 @@ open class NSData : NSObject, NSCopying, NSMutableCopying, NSSecureCoding {
 // MARK: -
 extension NSData : _SwiftBridgeable {
     typealias SwiftType = Data
-    internal var _swiftObject: SwiftType { return Data(referencing: self) }
+    internal var _swiftObject: SwiftType { return Data(self) }
 }
 
 extension Data : _NSBridgeable {
@@ -958,10 +954,11 @@ extension CFData : _NSBridgeable, _SwiftBridgeable {
     typealias NSType = NSData
     typealias SwiftType = Data
     internal var _nsObject: NSType { return unsafeBitCast(self, to: NSType.self) }
-    internal var _swiftObject: SwiftType { return Data(referencing: self._nsObject) }
+    internal var _swiftObject: SwiftType { return Data(self._nsObject) }
 }
 
 // MARK: -
+
 open class NSMutableData : NSData {
     internal final var _cfMutableObject: CFMutableData { return unsafeBitCast(self, to: CFMutableData.self) }
 
@@ -1010,7 +1007,6 @@ open class NSMutableData : NSData {
         super.init(data: data)
     }
 
-#if !os(WASI)
     public override init?(contentsOfFile path: String) {
         super.init(contentsOfFile: path)
     }
@@ -1026,7 +1022,6 @@ open class NSMutableData : NSData {
     public override init(contentsOf url: URL, options: NSData.ReadingOptions = []) throws {
         try super.init(contentsOf: url, options: options)
     }
-#endif
 
     public override init?(base64Encoded base64Data: Data, options: NSData.Base64DecodingOptions = []) {
         super.init(base64Encoded: base64Data, options: options)
@@ -1203,5 +1198,87 @@ extension NSData {
         if funnelsAreAbstract {
             NSRequiresConcreteImplementation()
         }
+    }
+}
+
+// MARK: - Bridging
+
+extension Data {
+    @available(*, unavailable, renamed: "copyBytes(to:count:)")
+    public func getBytes<UnsafeMutablePointerVoid: _Pointer>(_ buffer: UnsafeMutablePointerVoid, length: Int) { }
+    
+    @available(*, unavailable, renamed: "copyBytes(to:from:)")
+    public func getBytes<UnsafeMutablePointerVoid: _Pointer>(_ buffer: UnsafeMutablePointerVoid, range: NSRange) { }
+}
+
+
+extension Data {
+    public init(referencing d: NSData) {
+        self = Data(d)
+    }
+}
+
+extension Data : _ObjectiveCBridgeable {
+    @_semantics("convertToObjectiveC")
+    public func _bridgeToObjectiveC() -> NSData {
+        return self.withUnsafeBytes {
+            NSData(bytes: $0.baseAddress, length: $0.count)
+        }
+    }
+    
+    public static func _forceBridgeFromObjectiveC(_ input: NSData, result: inout Data?) {
+        // We must copy the input because it might be mutable; just like storing a value type in ObjC
+        result = Data(input)
+    }
+    
+    public static func _conditionallyBridgeFromObjectiveC(_ input: NSData, result: inout Data?) -> Bool {
+        // We must copy the input because it might be mutable; just like storing a value type in ObjC
+        result = Data(input)
+        return true
+    }
+
+//    @_effects(readonly)
+    public static func _unconditionallyBridgeFromObjectiveC(_ source: NSData?) -> Data {
+        guard let src = source else { return Data() }
+        return Data(src)
+    }
+}
+
+extension NSData : _HasCustomAnyHashableRepresentation {
+    // Must be @nonobjc to avoid infinite recursion during bridging.
+    @nonobjc
+    public func _toCustomAnyHashable() -> AnyHashable? {
+        return AnyHashable(Data._unconditionallyBridgeFromObjectiveC(self))
+    }
+}
+
+// MARK: -
+// Temporary extension on Data until this implementation lands in swift-foundation
+extension Data {
+        /// Find the given `Data` in the content of this `Data`.
+    ///
+    /// - parameter dataToFind: The data to be searched for.
+    /// - parameter options: Options for the search. Default value is `[]`.
+    /// - parameter range: The range of this data in which to perform the search. Default value is `nil`, which means the entire content of this data.
+    /// - returns: A `Range` specifying the location of the found data, or nil if a match could not be found.
+    /// - precondition: `range` must be in the bounds of the Data.
+    public func range(of dataToFind: Data, options: Data.SearchOptions = [], in range: Range<Index>? = nil) -> Range<Index>? {
+        let nsRange : NSRange
+        if let r = range {
+            nsRange = NSRange(location: r.lowerBound - startIndex, length: r.upperBound - r.lowerBound)
+        } else {
+            nsRange = NSRange(location: 0, length: count)
+        }
+
+        let ns = self as NSData
+        var opts = NSData.SearchOptions()
+        if options.contains(.anchored) { opts.insert(.anchored) }
+        if options.contains(.backwards) { opts.insert(.backwards) }
+
+        let result = ns.range(of: dataToFind, options: opts, in: nsRange)
+        if result.location == NSNotFound {
+            return nil
+        }
+        return (result.location + startIndex)..<((result.location + startIndex) + result.length)
     }
 }

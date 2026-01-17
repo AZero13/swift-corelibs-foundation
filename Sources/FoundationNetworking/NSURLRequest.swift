@@ -52,7 +52,7 @@ import Foundation
 /// with whether already-existing cache data is returned to satisfy a
 /// URL load request.
 extension NSURLRequest {
-    public enum CachePolicy : UInt {
+    public enum CachePolicy : UInt, Sendable {
         /// Specifies that the caching logic defined in the protocol
         /// implementation, if any, is used for a particular URL load request. This
         /// is the default policy for URL load requests.
@@ -86,7 +86,7 @@ extension NSURLRequest {
         case reloadRevalidatingCacheData // Unimplemented
     }
     
-    public enum NetworkServiceType : UInt {
+    public enum NetworkServiceType : UInt, Sendable {
         case `default` // Standard internet traffic
         case voip // Voice over IP control traffic
         case video // Video traffic
@@ -95,6 +95,9 @@ extension NSURLRequest {
         case networkServiceTypeCallSignaling // Call Signaling
     }
 }
+
+@available(*, unavailable)
+extension NSURLRequest : @unchecked Sendable { }
 
 /// An `NSURLRequest` object represents a URL load request in a
 /// manner independent of protocol and URL scheme.
@@ -370,6 +373,7 @@ open class NSURLRequest : NSObject, NSSecureCoding, NSCopying, NSMutableCopying 
     
     open internal(set) var httpShouldHandleCookies: Bool = true
     
+    @available(swift, deprecated: 6.1, message: "HTTP/1 pipelining has known compatibility issues, please adopt HTTP/2 and HTTP/3 instead")
     open internal(set) var httpShouldUsePipelining: Bool = true
 
     open override var description: String {
@@ -570,6 +574,7 @@ open class NSMutableURLRequest : NSURLRequest {
         set { super.httpShouldHandleCookies = newValue }
     }
     
+    @available(swift, deprecated: 6.1, message: "HTTP/1 pipelining has known compatibility issues, please adopt HTTP/2 and HTTP/3 instead")
     open override var httpShouldUsePipelining: Bool {
         get { return super.httpShouldUsePipelining }
         set { super.httpShouldUsePipelining = newValue }

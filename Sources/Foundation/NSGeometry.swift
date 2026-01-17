@@ -7,7 +7,7 @@
 // See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 
-public struct CGPoint {
+public struct CGPoint: Sendable {
     public var x: CGFloat
     public var y: CGFloat
     public init() {
@@ -39,7 +39,7 @@ extension CGPoint: Equatable {
     }
 }
 
-extension CGPoint: NSSpecialValueCoding {
+extension CGPoint: NSSpecialValueCoding, Hashable {
     init(bytes: UnsafeRawPointer) {
         self.x = bytes.load(as: CGFloat.self)
         self.y = bytes.load(fromByteOffset: MemoryLayout<CGFloat>.stride, as: CGFloat.self)
@@ -75,7 +75,7 @@ extension CGPoint: NSSpecialValueCoding {
         }
     }
 
-    func hash(into hasher: inout Hasher) {
+    public func hash(into hasher: inout Hasher) {
         hasher.combine(x)
         hasher.combine(y)
     }
@@ -100,7 +100,7 @@ extension CGPoint : Codable {
     }
 }
 
-public struct CGSize {
+public struct CGSize: Sendable {
     public var width: CGFloat
     public var height: CGFloat
     public init() {
@@ -132,7 +132,7 @@ extension CGSize: Equatable {
     }
 }
 
-extension CGSize: NSSpecialValueCoding {
+extension CGSize: NSSpecialValueCoding, Hashable {
     init(bytes: UnsafeRawPointer) {
         self.width = bytes.load(as: CGFloat.self)
         self.height = bytes.load(fromByteOffset: MemoryLayout<CGFloat>.stride, as: CGFloat.self)
@@ -168,7 +168,7 @@ extension CGSize: NSSpecialValueCoding {
         }
     }
 
-    func hash(into hasher: inout Hasher) {
+    public func hash(into hasher: inout Hasher) {
         hasher.combine(width)
         hasher.combine(height)
     }
@@ -193,7 +193,7 @@ extension CGSize : Codable {
     }
 }
 
-public struct CGRect {
+public struct CGRect: Sendable {
     public var origin: CGPoint
     public var size: CGSize
     public init() {
@@ -451,7 +451,7 @@ public typealias NSRect = CGRect
 public typealias NSRectPointer = UnsafeMutablePointer<NSRect>
 public typealias NSRectArray = UnsafeMutablePointer<NSRect>
 
-extension CGRect: NSSpecialValueCoding {
+extension CGRect: NSSpecialValueCoding, Hashable {
     init(bytes: UnsafeRawPointer) {
         self.origin = CGPoint(
             x: bytes.load(as: CGFloat.self),
@@ -491,7 +491,7 @@ extension CGRect: NSSpecialValueCoding {
         }
     }
 
-    func hash(into hasher: inout Hasher) {
+    public func hash(into hasher: inout Hasher) {
         origin.hash(into: &hasher)
         size.hash(into: &hasher)
     }
@@ -501,7 +501,7 @@ extension CGRect: NSSpecialValueCoding {
     }
 }
 
-public enum NSRectEdge : UInt {
+public enum NSRectEdge : UInt, Sendable {
     
     case minX
     case minY
@@ -509,7 +509,7 @@ public enum NSRectEdge : UInt {
     case maxY
 }
 
-public enum CGRectEdge : UInt32 {
+public enum CGRectEdge : UInt32, Sendable {
     
     case minXEdge
     case minYEdge
@@ -529,7 +529,7 @@ extension NSRectEdge {
 }
 
 
-public struct NSEdgeInsets {
+public struct NSEdgeInsets: Sendable {
     public var top: CGFloat
     public var left: CGFloat
     public var bottom: CGFloat
@@ -604,7 +604,7 @@ extension NSEdgeInsets: NSSpecialValueCoding {
     }
 }
 
-public struct AlignmentOptions : OptionSet {
+public struct AlignmentOptions : OptionSet, Sendable {
     public var rawValue : UInt64
     public init(rawValue: UInt64) { self.rawValue = rawValue }
     
@@ -997,7 +997,7 @@ public func NSPointInRect(_ aPoint: NSPoint, _ aRect: NSRect) -> Bool {
 
 public func NSMouseInRect(_ aPoint: NSPoint, _ aRect: NSRect, _ flipped: Bool) -> Bool {
     if flipped {
-        return aPoint.x >= aRect.minX && aPoint.y >= aRect.minX && aPoint.x < aRect.maxX && aPoint.y < aRect.maxY
+        return aPoint.x >= aRect.minX && aPoint.y >= aRect.minY && aPoint.x < aRect.maxX && aPoint.y < aRect.maxY
     }
     return aPoint.x >= aRect.minX && aPoint.y > aRect.minY && aPoint.x < aRect.maxX && aPoint.y <= aRect.maxY
 }

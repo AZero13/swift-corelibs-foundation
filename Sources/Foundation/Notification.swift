@@ -10,6 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+@available(*, unavailable)
+extension Notification : @unchecked Sendable { }
 
 /**
  `Notification` encapsulates information broadcast to observers via a `NotificationCenter`.
@@ -109,7 +111,7 @@ extension Notification : _ObjectiveCBridgeable {
     
     public static func _forceBridgeFromObjectiveC(_ x: NSNotification, result: inout Notification?) {
         if !_conditionallyBridgeFromObjectiveC(x, result: &result) {
-            fatalError("Unable to bridge type")
+            fatalError("Unable to bridge \(NSNotification.self) to \(self)")
         }
     }
     

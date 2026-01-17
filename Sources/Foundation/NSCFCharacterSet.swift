@@ -78,6 +78,10 @@ internal class _NSCFCharacterSet : NSMutableCharacterSet {
     override func invert() {
         CFCharacterSetInvert(_cfMutableObject)
     }
+    
+    override var classForCoder: AnyClass {
+        return NSCharacterSet.self
+    }
 }
 
 internal  func _CFSwiftCharacterSetExpandedCFCharacterSet(_ cset: CFTypeRef) -> Unmanaged<CFCharacterSet>? {
@@ -93,7 +97,8 @@ internal  func _CFSwiftCharacterSetCharacterIsMember(_ cset: CFTypeRef, _ ch: Un
 }
 
 internal  func _CFSwiftCharacterSetMutableCopy(_ cset: CFTypeRef) -> Unmanaged<CFMutableCharacterSet> {
-    return Unmanaged.passRetained(unsafeBitCast((cset as! NSCharacterSet).mutableCopy(), to: CFMutableCharacterSet.self))
+    let copy = (cset as! NSCharacterSet).mutableCopy() as! NSMutableCharacterSet
+    return Unmanaged.passRetained(unsafeDowncast(copy, to: CFMutableCharacterSet.self))
 }
 
 internal  func _CFSwiftCharacterSetLongCharacterIsMember(_ cset: CFTypeRef, _ ch:UInt32) -> Bool {

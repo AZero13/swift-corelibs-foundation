@@ -7,25 +7,7 @@
 // See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 
-#if DARWIN_COMPATIBILITY_TESTS
-public typealias XCTestCaseEntry = (testCaseClass: XCTestCase.Type, allTests: [(String, XCTestCaseClosure)])
-public typealias XCTestCaseClosure = (XCTestCase) throws -> Void
-
-public func testCase<T: XCTestCase>(_ allTests: [(String, (T) -> () throws -> Void)]) -> XCTestCaseEntry {
-    let tests: [(String, XCTestCaseClosure)] = allTests.map { ($0.0, test($0.1)) }
-    return (T.self, tests)
-}
-
-private func test<T: XCTestCase>(_ testFunc: @escaping (T) -> () throws -> Void) -> XCTestCaseClosure {
-    return { testCaseType in
-        guard let testCase = testCaseType as? T else {
-            fatalError("Attempt to invoke test on class \(T.self) with incompatible instance type \(type(of: testCaseType))")
-        }
-
-        try testFunc(testCase)()
-    }
-}
-#endif
+import XCTest
 
 
 func checkHashing_ValueType<Item: Hashable, S: Sequence>(
@@ -233,7 +215,7 @@ func expectNoChanges<T: BinaryInteger>(_ check: @autoclosure () -> T, by differe
 
 extension Fixture where ValueType: NSObject & NSCoding {
     func loadEach(handler: (ValueType, FixtureVariant) throws -> Void) throws {
-        try self.loadEach(fixtureRepository: try XCTUnwrap(testBundle().url(forResource: "Fixtures", withExtension: nil)), handler: handler)
+        try self.loadEach(fixtureRepository: try XCTUnwrap(Bundle.module.url(forResource: "Fixtures", withExtension: nil)), handler: handler)
     }
     
     func assertLoadedValuesMatch(_ matchHandler: (ValueType, ValueType) -> Bool = { $0 == $1 }) throws {
@@ -658,35 +640,6 @@ extension String {
     }
 }
 
-extension FileHandle: TextOutputStream {
-    public func write(_ string: String) {
-        write(Data(string.utf8))
-    }
-    
-    struct EncodedOutputStream: TextOutputStream {
-        let fileHandle: FileHandle
-        let encoding: String.Encoding
-        
-        init(_ fileHandle: FileHandle, encoding: String.Encoding) {
-            self.fileHandle = fileHandle
-            self.encoding = encoding
-        }
-        
-        func write(_ string: String) {
-            fileHandle.write(string.data(using: encoding)!)
-        }
-    }
-}
-
-extension NSLock {
-    public func synchronized<T>(_ closure: () throws -> T) rethrows -> T {
-        self.lock()
-        defer { self.unlock() }
-        return try closure()
-    }
-}
-
-
 // Create a uniquely named temporary directory, pass the URL and path to a closure then remove the directory afterwards.
 public func withTemporaryDirectory<R>(functionName: String = #function, block: (URL, String) throws -> R) throws -> R {
 
@@ -697,7 +650,8 @@ public func withTemporaryDirectory<R>(functionName: String = #function, block: (
 
     // Create the temporary directory as one level so that it doesnt leave a directory hierarchy on the filesystem
     // eg tmp dir will be something like:  /tmp/TestFoundation-test_name-BE16B2FF-37FA-4F70-8A84-923D1CC2A860
-    let fname = testBundleName() + "-" + String(functionName[..<idx]) + "-" + NSUUID().uuidString
+    let testBundleName = Bundle.module.infoDictionary!["CFBundleName"] as! String
+    let fname = testBundleName + "-" + String(functionName[..<idx]) + "-" + NSUUID().uuidString
     let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).appendingPathComponent(fname)
     let fm = FileManager.default
     try? fm.removeItem(at: tmpDir)

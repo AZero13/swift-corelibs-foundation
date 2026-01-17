@@ -17,7 +17,7 @@ extension CharacterSet {
 
 @available(swift 5.0)
 extension Scanner {
-    public enum NumberRepresentation {
+    public enum NumberRepresentation : Sendable {
         case decimal // See the %d, %f and %F format conversions.
         case hexadecimal // See the %x, %X, %a and %A format conversions. For integers, a leading 0x or 0X is optional; for floating-point numbers, it is required.
     }
@@ -43,7 +43,7 @@ extension Scanner {
         if let value = scanInt64(representation: representation) {
             return Int(value)
         }
-        #elseif arch(i386) || arch(arm)
+        #elseif arch(i386) || arch(arm) || arch(wasm32)
         if let value = scanInt32(representation: representation) {
             return Int(value)
         }

@@ -12,8 +12,9 @@
 import WinSDK
 #endif
 
-#if os(Android)
-    // Android Glibc differs a little with respect to the Linux Glibc.
+#if canImport(Android)
+    @preconcurrency import Android
+    // Android Bionic differs a little with respect to the Linux Glibc.
 
     // IFF_LOOPBACK is part of the enumeration net_device_flags, which needs to
     // convert to UInt32.
@@ -24,8 +25,8 @@ import WinSDK
     }
 
     // getnameinfo uses size_t for its 4th and 6th arguments.
-    private func getnameinfo(_ addr: UnsafePointer<sockaddr>?, _ addrlen: socklen_t, _ host: UnsafeMutablePointer<Int8>?, _ hostlen: socklen_t, _ serv: UnsafeMutablePointer<Int8>?, _ servlen: socklen_t, _ flags: Int32) -> Int32 {
-        return Glibc.getnameinfo(addr, addrlen, host, Int(hostlen), serv, Int(servlen), flags)
+    private func getnameinfo(_ addr: UnsafePointer<sockaddr>, _ addrlen: socklen_t, _ host: UnsafeMutablePointer<Int8>?, _ hostlen: socklen_t, _ serv: UnsafeMutablePointer<Int8>?, _ servlen: socklen_t, _ flags: Int32) -> Int32 {
+        return Android.getnameinfo(addr, addrlen, host, Int(hostlen), serv, Int(servlen), flags)
     }
 
     // getifaddrs and freeifaddrs are not available in Android 6.0 or earlier, so call these functions dynamically.
@@ -55,6 +56,9 @@ import WinSDK
     }
 #endif
 
+@available(*, unavailable)
+extension Host : @unchecked Sendable { }
+
 open class Host: NSObject {
     enum ResolveType {
         case name
@@ -67,7 +71,7 @@ open class Host: NSObject {
     internal var _names = [String]()
     internal var _addresses = [String]()
     
-    static internal let _current = Host(currentHostName(), .current)
+    static internal let _cachedCurrentHostName = currentHostName()
     
     internal init(_ info: String?, _ type: ResolveType) {
         _info = info
@@ -91,6 +95,8 @@ open class Host: NSObject {
             return "localhost"
         }
         return String(cString: hostname)
+#elseif os(WASI) // WASI does not have uname
+        return "localhost"
 #else
         let hname = UnsafeMutablePointer<Int8>.allocate(capacity: Int(NI_MAXHOST))
         defer {
@@ -105,7 +111,7 @@ open class Host: NSObject {
     }
     
     open class func current() -> Host {
-        return _current
+        return Host(Self._cachedCurrentHostName, .current)
     }
     
     public convenience init(name: String?) {
@@ -130,7 +136,7 @@ open class Host: NSObject {
         var ulResult: ULONG =
             GetAdaptersAddresses(ULONG(AF_UNSPEC), 0, nil, nil, &ulSize)
 
-        var arAdapters: UnsafeMutableRawPointer =
+        let arAdapters: UnsafeMutableRawPointer =
             UnsafeMutableRawPointer.allocate(byteCount: Int(ulSize),
                                              alignment: 1)
         defer { arAdapters.deallocate() }
@@ -145,7 +151,7 @@ open class Host: NSObject {
         while pAdapter != nil {
           // print("Adapter: \(String(cString: pAdapter!.pointee.AdapterName))")
 
-          var arAddresses: UnsafeMutablePointer<IP_ADAPTER_UNICAST_ADDRESS> =
+          let arAddresses: UnsafeMutablePointer<IP_ADAPTER_UNICAST_ADDRESS> =
               pAdapter!.pointee.FirstUnicastAddress
 
           var pAddress: UnsafeMutablePointer<IP_ADAPTER_UNICAST_ADDRESS>? =
@@ -170,6 +176,9 @@ open class Host: NSObject {
         }
         _names = [info]
         _resolved = true
+#elseif os(WASI) // WASI does not have getifaddrs
+        _names = [info]
+        _resolved = true
 #else
         var ifaddr: UnsafeMutablePointer<ifaddrs>? = nil
         if getifaddrs(&ifaddr) != 0 {
@@ -186,7 +195,7 @@ open class Host: NSObject {
                 let family = ifa_addr.pointee.sa_family
                 if family == sa_family_t(AF_INET) || family == sa_family_t(AF_INET6) {
                     let sa_len: socklen_t = socklen_t((family == sa_family_t(AF_INET6)) ? MemoryLayout<sockaddr_in6>.size : MemoryLayout<sockaddr_in>.size)
-#if os(OpenBSD)
+#if os(OpenBSD) || os(FreeBSD)
                     let hostlen = size_t(NI_MAXHOST)
 #else
                     let hostlen = socklen_t(NI_MAXHOST)
@@ -267,6 +276,11 @@ open class Host: NSObject {
 
           _resolved = true
         }
+#elseif os(WASI) // WASI does not have getaddrinfo
+        if let info = _info {
+            _names = [info]
+            _resolved = true
+        }
 #else
         if let info = _info {
             var flags: Int32 = 0
@@ -281,7 +295,7 @@ open class Host: NSObject {
             }
             var hints = addrinfo()
             hints.ai_family = PF_UNSPEC
-#if os(macOS) || os(iOS) || os(Android) || os(OpenBSD)
+#if os(macOS) || os(iOS) || os(Android) || os(OpenBSD) || canImport(Musl) || os(FreeBSD)
             hints.ai_socktype = SOCK_STREAM
 #else
             hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
@@ -311,7 +325,7 @@ open class Host: NSObject {
                 }
                 let sa_len: socklen_t = socklen_t((family == AF_INET6) ? MemoryLayout<sockaddr_in6>.size : MemoryLayout<sockaddr_in>.size)
                 let lookupInfo = { (content: inout [String], flags: Int32) in
-#if os(OpenBSD)
+#if os(OpenBSD) || os(FreeBSD)
                     let hostlen = size_t(NI_MAXHOST)
 #else
                     let hostlen = socklen_t(NI_MAXHOST)

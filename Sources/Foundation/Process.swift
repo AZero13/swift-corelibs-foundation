@@ -7,6 +7,7 @@
 // See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 
+#if canImport(Dispatch)
 @_implementationOnly import CoreFoundation
 #if os(Windows)
 import WinSDK
@@ -17,10 +18,14 @@ import struct WinSDK.HANDLE
 
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Android)
+@preconcurrency import Android
 #endif
 
+internal import Synchronization
+
 extension Process {
-    public enum TerminationReason : Int {
+    public enum TerminationReason : Int, Sendable {
         case exit
         case uncaughtSignal
     }
@@ -46,9 +51,12 @@ private func WTERMSIG(_ status: Int32) -> Int32 {
     return status & 0x7f
 }
 
-private var managerThreadRunLoop : RunLoop? = nil
-private var managerThreadRunLoopIsRunning = false
-private var managerThreadRunLoopIsRunningCondition = NSCondition()
+// Protected by 'Once' below in `setup`
+private nonisolated(unsafe) var managerThreadRunLoop : RunLoop? = nil
+
+// Protected by managerThreadRunLoopIsRunningCondition
+private nonisolated(unsafe) var managerThreadRunLoopIsRunning = false
+private let managerThreadRunLoopIsRunningCondition = NSCondition()
 
 internal let kCFSocketNoCallBack: CFOptionFlags = 0 // .noCallBack cannot be used because empty option flags are imported as unavailable.
 internal let kCFSocketAcceptCallBack = CFSocketCallBackType.acceptCallBack.rawValue
@@ -219,15 +227,12 @@ private func quoteWindowsCommandLine(_ commandLine: [String]) -> String {
 }
 #endif
 
-open class Process: NSObject {
+open class Process: NSObject, @unchecked Sendable {
+    static let once = Mutex(false)
+    
     private static func setup() {
-        struct Once {
-            static var done = false
-            static let lock = NSLock()
-        }
-        
-        Once.lock.synchronized {
-            if !Once.done {
+        once.withLock {
+            if !$0 {
                 let thread = Thread {
                     managerThreadRunLoop = RunLoop.current
                     var emptySourceContext = CFRunLoopSourceContext()
@@ -260,7 +265,7 @@ open class Process: NSObject {
                     managerThreadRunLoopIsRunningCondition.wait()
                 }
                 managerThreadRunLoopIsRunningCondition.unlock()
-                Once.done = true
+                $0 = true
             }
         }
     }
@@ -487,7 +492,7 @@ open class Process: NSObject {
         // Dispatch the manager thread if it isn't already running
         Process.setup()
 
-        // Check that the process isnt run more than once
+        // Check that the process isn't run more than once
         guard hasStarted == false && hasFinished == false else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSExecutableLoadError)
         }
@@ -498,7 +503,7 @@ open class Process: NSObject {
         }
 
 #if os(Windows)
-        var command: [String] = [launchPath]
+        var command: [String] = [try FileManager.default._fileSystemRepresentation(withPath: launchPath) { String(decodingCString: $0, as: UTF16.self) }]
         if let arguments = self.arguments {
           command.append(contentsOf: arguments)
         }
@@ -685,6 +690,7 @@ open class Process: NSObject {
         if !CloseHandle(piProcessInfo.hThread) {
           throw _NSErrorWithWindowsError(GetLastError(), reading: false)
         }
+        self.processIdentifier = Int32(GetProcessId(self.processHandle))
 
         if let pipe = standardInput as? Pipe {
           pipe.fileHandleForReading.closeFile()
@@ -776,7 +782,7 @@ open class Process: NSObject {
         }
 
         var taskSocketPair : [Int32] = [0, 0]
-#if os(macOS) || os(iOS) || os(Android) || os(OpenBSD)
+#if os(macOS) || os(iOS) || os(Android) || os(OpenBSD) || os(FreeBSD) || canImport(Musl)
         socketpair(AF_UNIX, SOCK_STREAM, 0, &taskSocketPair)
 #else
         socketpair(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0, &taskSocketPair)
@@ -922,13 +928,29 @@ open class Process: NSObject {
         for fd in addclose.filter({ $0 >= 0 }) {
             try _throwIfPosixError(_CFPosixSpawnFileActionsAddClose(fileActions, fd))
         }
+        let useFallbackChdir: Bool
+        if let dir = currentDirectoryURL?.path {
+            let chdirResult = _CFPosixSpawnFileActionsChdir(fileActions, dir)
+            useFallbackChdir = chdirResult == ENOSYS
+            if !useFallbackChdir {
+                try _throwIfPosixError(chdirResult)
+            }
+        } else {
+            useFallbackChdir = false
+        }
 
-#if canImport(Darwin) || os(Android) || os(OpenBSD)
+#if canImport(Darwin) || os(Android) || os(OpenBSD) || os(FreeBSD)
         var spawnAttrs: posix_spawnattr_t? = nil
 #else
         var spawnAttrs: posix_spawnattr_t = posix_spawnattr_t()
 #endif
         try _throwIfPosixError(posix_spawnattr_init(&spawnAttrs))
+#if os(Android)
+        guard var spawnAttrs else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                          userInfo: [NSURLErrorKey:self.executableURL!])
+        }
+#endif
         try _throwIfPosixError(posix_spawnattr_setflags(&spawnAttrs, .init(POSIX_SPAWN_SETPGROUP)))
 #if canImport(Darwin)
         try _throwIfPosixError(posix_spawnattr_setflags(&spawnAttrs, .init(POSIX_SPAWN_CLOEXEC_DEFAULT)))
@@ -944,22 +966,35 @@ open class Process: NSObject {
         }
 #endif
 
-        let fileManager = FileManager()
-        let previousDirectoryPath = fileManager.currentDirectoryPath
-        if let dir = currentDirectoryURL?.path, !fileManager.changeCurrentDirectoryPath(dir) {
-            throw _NSErrorWithErrno(errno, reading: true, url: currentDirectoryURL)
+        // Unsafe fallback for systems missing posix_spawn_file_actions_addchdir[_np]
+        // This includes Glibc versions older than 2.29 such as on Amazon Linux 2
+        let previousDirectoryPath: String?
+        if useFallbackChdir {
+            let fileManager = FileManager()
+            previousDirectoryPath = fileManager.currentDirectoryPath
+            if let dir = currentDirectoryURL?.path, !fileManager.changeCurrentDirectoryPath(dir) {
+                throw _NSErrorWithErrno(errno, reading: true, url: currentDirectoryURL)
+            }
+        } else {
+            previousDirectoryPath = nil
         }
 
         defer {
-            // Reset the previous working directory path.
-            fileManager.changeCurrentDirectoryPath(previousDirectoryPath)
+            if let previousDirectoryPath {
+                // Reset the previous working directory path.
+                let fileManager = FileManager()
+                _ = fileManager.changeCurrentDirectoryPath(previousDirectoryPath)
+            }
         }
 
         // Launch
         var pid = pid_t()
-        guard _CFPosixSpawn(&pid, launchPath, fileActions, &spawnAttrs, argv, envp) == 0 else {
-            throw _NSErrorWithErrno(errno, reading: true, path: launchPath)
-        }
+        
+        try FileManager.default._fileSystemRepresentation(withPath: launchPath, { fsRep in
+            guard _CFPosixSpawn(&pid, fsRep, fileActions, &spawnAttrs, argv, envp) == 0 else {
+                throw _NSErrorWithErrno(errno, reading: true, path: launchPath)
+            }
+        })
         posix_spawnattr_destroy(&spawnAttrs)
 
         // Close the write end of the input and output pipes.
@@ -1068,26 +1103,11 @@ open class Process: NSObject {
     // status
 #if os(Windows)
     open private(set) var processHandle: HANDLE = INVALID_HANDLE_VALUE
-    open var processIdentifier: Int32 {
-      guard processHandle != INVALID_HANDLE_VALUE else {
-          return 0
-      }
-      return Int32(GetProcessId(processHandle))
-    }
-    open private(set) var isRunning: Bool = false
-
-    private var hasStarted: Bool {
-      return processHandle != INVALID_HANDLE_VALUE
-    }
-    private var hasFinished: Bool {
-      return hasStarted && !isRunning
-    }
-#else
+#endif
     open private(set) var processIdentifier: Int32 = 0
     open private(set) var isRunning: Bool = false
     private var hasStarted: Bool { return processIdentifier > 0 }
     private var hasFinished: Bool { return !isRunning && processIdentifier > 0 }
-#endif
 
     private var _terminationStatus: Int32 = 0
     public var terminationStatus: Int32 {
@@ -1106,11 +1126,11 @@ open class Process: NSObject {
     /*
     A block to be invoked when the process underlying the Process terminates.  Setting the block to nil is valid, and stops the previous block from being invoked, as long as it hasn't started in any way.  The Process is passed as the argument to the block so the block does not have to capture, and thus retain, it.  The block is copied when set.  Only one termination handler block can be set at any time.  The execution context in which the block is invoked is undefined.  If the Process has already finished, the block is executed immediately/soon (not necessarily on the current thread).  If a terminationHandler is set on an Process, the ProcessDidTerminateNotification notification is not posted for that process.  Also note that -waitUntilExit won't wait until the terminationHandler has been fully executed.  You cannot use this property in a concrete subclass of Process which hasn't been updated to include an implementation of the storage and use of it.  
     */
-    open var terminationHandler: ((Process) -> Void)?
+    open var terminationHandler: (@Sendable (Process) -> Void)?
     open var qualityOfService: QualityOfService = .default  // read-only after the process is launched
 
 
-    open class func run(_ url: URL, arguments: [String], terminationHandler: ((Process) -> Void)? = nil) throws -> Process {
+    open class func run(_ url: URL, arguments: [String], terminationHandler: (@Sendable (Process) -> Void)? = nil) throws -> Process {
         let process = Process()
         process.executableURL = url
         process.arguments = arguments
@@ -1136,7 +1156,7 @@ open class Process: NSObject {
         let currentRunLoop = RunLoop.current
 
         let runRunLoop : () -> Void = (currentRunLoop == self.runLoop)
-                ? { currentRunLoop.run(mode: .default, before: Date(timeIntervalSinceNow: runInterval)) }
+                ? { _ = currentRunLoop.run(mode: .default, before: Date(timeIntervalSinceNow: runInterval)) }
                 : { currentRunLoop.run(until: Date(timeIntervalSinceNow: runInterval)) }
         // update .runLoop to allow early wakeup triggered by terminateRunLoop.
         self.runLoop = currentRunLoop
@@ -1166,6 +1186,17 @@ open class Process: NSObject {
         if let handler = self.terminationHandler {
             let thread: Thread = Thread { handler(self) }
             thread.start()
+            closeHandler()
+        } else {
+            closeHandler()
+        }
+
+        // This closeHandler is called as late as possible 
+        // so the processHandle (on Windows) is valid for as long as possible. 
+        func closeHandler() {
+#if os(Windows)
+            CloseHandle(self.processHandle)
+#endif
         }
     }
 }
@@ -1174,3 +1205,5 @@ extension Process {
     
     public static let didTerminateNotification = NSNotification.Name(rawValue: "NSTaskDidTerminateNotification")
 }
+
+#endif

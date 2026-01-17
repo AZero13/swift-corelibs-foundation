@@ -15,9 +15,11 @@ import Foundation
 
 #if os(Windows)
 import WinSDK
+#elseif canImport(Android)
+@preconcurrency import Android
 #endif
 
-public struct HTTPCookiePropertyKey : RawRepresentable, Equatable, Hashable {
+public struct HTTPCookiePropertyKey : RawRepresentable, Equatable, Hashable, Sendable {
     public private(set) var rawValue: String
     
     public init(_ rawValue: String) {
@@ -101,7 +103,7 @@ internal extension HTTPCookiePropertyKey {
 /// an immutable object initialized from a dictionary that contains
 /// the various cookie attributes. It has accessors to get the various
 /// attributes of a cookie.
-open class HTTPCookie : NSObject {
+open class HTTPCookie : NSObject, @unchecked Sendable {
 
     let _comment: String?
     let _commentURL: URL?
@@ -115,7 +117,7 @@ open class HTTPCookie : NSObject {
     let _portList: [NSNumber]?
     let _value: String
     let _version: Int
-    var _properties: [HTTPCookiePropertyKey : Any]
+    let _properties: [HTTPCookiePropertyKey : Any]
 
     // See: https://tools.ietf.org/html/rfc2616#section-3.3.1
 
@@ -376,7 +378,7 @@ open class HTTPCookie : NSObject {
             _HTTPOnly = false
         }
 
-        _properties = [
+        var props : [HTTPCookiePropertyKey : Any] = [
             .created : Date().timeIntervalSinceReferenceDate, // Cocoa Compatibility
             .discard : _sessionOnly,
             .domain : _domain,
@@ -387,23 +389,24 @@ open class HTTPCookie : NSObject {
             .version : _version
         ]
         if let comment = properties[.comment] {
-            _properties[.comment] = comment
+            props[.comment] = comment
         }
         if let commentURL = properties[.commentURL] {
-            _properties[.commentURL] = commentURL
+            props[.commentURL] = commentURL
         }
         if let expires = properties[.expires] {
-            _properties[.expires] = expires
+            props[.expires] = expires
         }
         if let maximumAge = properties[.maximumAge] {
-            _properties[.maximumAge] = maximumAge
+            props[.maximumAge] = maximumAge
         }
         if let originURL = properties[.originURL] {
-            _properties[.originURL] = originURL
+            props[.originURL] = originURL
         }
         if let _portList = _portList {
-            _properties[.port] = _portList
+            props[.port] = _portList
         }
+        _properties = props
     }
 
     /// Return a dictionary of header fields that can be used to add the

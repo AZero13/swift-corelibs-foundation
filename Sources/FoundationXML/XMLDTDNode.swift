@@ -12,15 +12,14 @@ import SwiftFoundation
 #else
 import Foundation
 #endif
-@_implementationOnly import CoreFoundation
-@_implementationOnly import CFXMLInterface
+@_implementationOnly import _CFXMLInterface
 
 /*!
     @typedef XMLDTDNodeKind
 	@abstract The subkind of a DTD node kind.
 */
 extension XMLDTDNode {
-    public enum DTDKind : UInt {
+    public enum DTDKind : UInt, Sendable {
         
         
         case general

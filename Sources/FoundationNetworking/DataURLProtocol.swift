@@ -91,8 +91,7 @@ internal class _DataURLProtocol: URLProtocol {
             urlClient.urlProtocolDidFinishLoading(self)
         } else {
             let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorBadURL)
-            if let session = self.task?.session as? URLSession, let delegate = session.delegate as? URLSessionTaskDelegate,
-                let task = self.task {
+            if let task = self.task, let session = task.actualSession, let delegate = task.delegate {
                 delegate.urlSession(session, task: task, didCompleteWithError: error)
             }
         }
@@ -115,7 +114,7 @@ internal class _DataURLProtocol: URLProtocol {
         var charSet: String?
         var base64 = false
 
-        // Simple validation that the mime type has only one '/' and its not at the start or end.
+        // Simple validation that the mime type has only one '/' and it's not at the start or end.
         func validate(mimeType: String) -> Bool {
             if mimeType.hasPrefix("/") { return false }
             var count = 0
@@ -140,7 +139,7 @@ internal class _DataURLProtocol: URLProtocol {
              while let element = iterator.next() {
                 switch element {
                     case .asciiCharacter(let ch) where ch == Character(","):
-                        // ";base64 must be the last part just before the ',' that seperates the header from the data
+                        // ";base64 must be the last part just before the ',' that separates the header from the data
                         if foundCharsetKey {
                             charSet = part
                         } else {

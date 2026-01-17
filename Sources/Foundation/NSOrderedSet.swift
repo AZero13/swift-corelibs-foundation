@@ -7,7 +7,11 @@
 // See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 
+
 /****************       Immutable Ordered Set   ****************/
+@available(*, unavailable)
+extension NSOrderedSet : @unchecked Sendable { }
+
 open class NSOrderedSet: NSObject, NSCopying, NSMutableCopying, NSSecureCoding, ExpressibleByArrayLiteral {
 
     fileprivate var _storage: NSSet
@@ -277,7 +281,7 @@ open class NSOrderedSet: NSObject, NSCopying, NSMutableCopying, NSSecureCoding, 
     }
     
     open func enumerateObjects(at s: IndexSet, options opts: NSEnumerationOptions = [], using block: (Any, Int, UnsafeMutablePointer<ObjCBool>) -> Swift.Void) {
-        _orderedStorage.enumerateObjects(options: opts, using: block)
+        _orderedStorage.enumerateObjects(at: s, options: opts, using: block)
     }
     
     open func index(ofObjectPassingTest predicate: (Any, Int, UnsafeMutablePointer<ObjCBool>) -> Bool) -> Int {

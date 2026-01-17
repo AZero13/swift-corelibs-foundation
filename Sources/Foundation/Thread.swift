@@ -13,7 +13,13 @@ import WinSDK
 #endif
 
 #if canImport(Glibc)
-import Glibc
+@preconcurrency import Glibc
+#elseif canImport(Musl)
+@preconcurrency import Musl
+#elseif canImport(Bionic)
+@preconcurrency import Bionic
+#elseif canImport(WASILibc) && _runtime(_multithreaded)
+import wasi_pthread
 #endif
 
 // WORKAROUND_SR9811
@@ -49,7 +55,7 @@ internal class NSThreadSpecific<T: NSObject> {
     }
 }
 
-internal enum _NSThreadStatus {
+internal enum _NSThreadStatus : Sendable {
     case initialized
     case starting
     case executing
@@ -73,9 +79,13 @@ private func NSThreadStart(_ context: UnsafeMutableRawPointer?) -> UnsafeMutable
     return nil
 }
 
+@available(*, unavailable)
+extension Thread : @unchecked Sendable { }
+
 open class Thread : NSObject {
 
-    static internal var _currentThread = NSThreadSpecific<Thread>()
+    static internal nonisolated(unsafe) var _currentThread = NSThreadSpecific<Thread>()
+    @available(*, noasync)
     open class var current: Thread {
         return Thread._currentThread.get() {
             if Thread.isMainThread {
@@ -95,7 +105,7 @@ open class Thread : NSObject {
     }
 
     // !!! NSThread's mainThread property is incorrectly exported as "main", which conflicts with its "main" method.
-    private static let _mainThread: Thread = {
+    private static nonisolated(unsafe) let _mainThread: Thread = {
         var thread = Thread(thread: _CFMainPThread)
         thread._status = .executing
         return thread
@@ -109,18 +119,23 @@ open class Thread : NSObject {
     /// Alternative API for detached thread creation
     /// - Experiment: This is a draft API currently under consideration for official import into Foundation as a suitable alternative to creation via selector
     /// - Note: Since this API is under consideration it may be either removed or revised in the near future
-    open class func detachNewThread(_ block: @escaping () -> Swift.Void) {
+    open class func detachNewThread(_ block: @Sendable @escaping () -> Swift.Void) {
         let t = Thread(block: block)
         t.start()
     }
 
     open class func isMultiThreaded() -> Bool {
+#if _runtime(_multithreaded)
         return true
+#else
+        return false
+#endif
     }
 
+    @available(*, noasync)
     open class func sleep(until date: Date) {
 #if os(Windows)
-        var hTimer: HANDLE = CreateWaitableTimerW(nil, true, nil)
+        let hTimer: HANDLE = CreateWaitableTimerW(nil, true, nil)
         if hTimer == HANDLE(bitPattern: 0) { fatalError("unable to create timer: \(GetLastError())") }
         defer { CloseHandle(hTimer) }
 
@@ -155,9 +170,10 @@ open class Thread : NSObject {
 #endif
     }
 
+    @available(*, noasync)
     open class func sleep(forTimeInterval interval: TimeInterval) {
 #if os(Windows)
-        var hTimer: HANDLE = CreateWaitableTimerW(nil, true, nil)
+        let hTimer: HANDLE = CreateWaitableTimerW(nil, true, nil)
         // FIXME(compnerd) how to check that hTimer is not NULL?
         defer { CloseHandle(hTimer) }
 
@@ -190,12 +206,18 @@ open class Thread : NSObject {
 #endif
     }
 
+    #if os(WASI)
+    @available(*, unavailable, message: "exit() is not available on WASI")
+    #endif
+    @available(*, noasync)
     open class func exit() {
+#if !os(WASI)
         Thread.current._status = .finished
 #if os(Windows)
         ExitThread(0)
 #else
         pthread_exit(nil)
+#endif
 #endif
     }
 
@@ -214,7 +236,7 @@ open class Thread : NSObject {
         get { _attrStorage.value }
         set { _attrStorage.value = newValue }
     }
-#elseif CYGWIN || os(OpenBSD)
+#elseif CYGWIN || os(OpenBSD) || os(FreeBSD)
     internal var _attr : pthread_attr_t? = nil
 #else
     internal var _attr = pthread_attr_t()
@@ -236,13 +258,15 @@ open class Thread : NSObject {
 #if !os(Windows)
         let _ = withUnsafeMutablePointer(to: &_attr) { attr in
             pthread_attr_init(attr)
+            #if !os(WASI) // WASI does not support scheduling contention scope
             pthread_attr_setscope(attr, Int32(PTHREAD_SCOPE_SYSTEM))
+            #endif
             pthread_attr_setdetachstate(attr, Int32(PTHREAD_CREATE_DETACHED))
         }
 #endif
     }
 
-    public convenience init(block: @escaping () -> Swift.Void) {
+    public convenience init(block: @Sendable @escaping () -> Swift.Void) {
         self.init()
         _main = block
     }
@@ -254,7 +278,7 @@ open class Thread : NSObject {
             _status = .finished
             return
         }
-#if CYGWIN || os(OpenBSD)
+#if CYGWIN || os(OpenBSD) || os(FreeBSD)
         if let attr = self._attr {
             _thread = self.withRetainedReference {
               return _CFThreadCreate(attr, NSThreadStart, $0)
@@ -293,20 +317,34 @@ open class Thread : NSObject {
           return ""
         }
       #else
+        // Result is null-terminated
         guard _CFThreadGetName(&buf, Int32(buf.count)) == 0 else {
           return ""
         }
       #endif
-        return String(cString: buf)
+        guard let firstNull = buf.firstIndex(of: 0) else {
+            return ""
+        }
+        if firstNull == buf.startIndex {
+            return ""
+        } else {
+            return String(validating: buf[buf.startIndex..<firstNull], as: UTF8.self)
+        }
     }
 
 #if os(Windows)
     open var stackSize: Int {
       get {
+        // If we set a stack size for this thread.
+        // Otherwise, query the actual limits.
+        guard _attr.dwThreadStackReservation == 0 else {
+            return Int(_attr.dwThreadStackReservation)
+        }
         var ulLowLimit: ULONG_PTR = 0
         var ulHighLimit: ULONG_PTR = 0
         GetCurrentThreadStackLimits(&ulLowLimit, &ulHighLimit)
-        return Int(ulLowLimit)
+        // Return the reserved stack span.
+        return Int(ulHighLimit - ulLowLimit)
       }
       set {
         _attr.dwThreadStackReservation = DWORD(newValue)
@@ -348,6 +386,7 @@ open class Thread : NSObject {
         return _cancelled
     }
 
+    @available(*, noasync)
     open var isMainThread: Bool {
         return self === Thread.mainThread
     }
@@ -356,17 +395,21 @@ open class Thread : NSObject {
         _cancelled = true
     }
 
+    // ###TODO: Switch these over to using the Swift runtime's backtracer
+    //          once we have Windows support there.
 
     private class func backtraceAddresses<T>(_ body: (UnsafeMutablePointer<UnsafeMutableRawPointer?>, Int) -> [T]) -> [T] {
         // Same as swift/stdlib/public/runtime/Errors.cpp backtrace
         let maxSupportedStackDepth = 128;
         let addrs = UnsafeMutablePointer<UnsafeMutableRawPointer?>.allocate(capacity: maxSupportedStackDepth)
         defer { addrs.deallocate() }
-#if os(Android) || os(OpenBSD)
+#if os(Android) || os(OpenBSD) || canImport(Musl) || os(WASI)
         let count = 0
 #elseif os(Windows)
         let count = RtlCaptureStackBackTrace(0, DWORD(maxSupportedStackDepth),
                                              addrs, nil)
+#elseif os(FreeBSD)
+        let count = backtrace(addrs, maxSupportedStackDepth)
 #else
         let count = backtrace(addrs, Int32(maxSupportedStackDepth))
 #endif
@@ -383,48 +426,57 @@ open class Thread : NSObject {
     }
 
     open class var callStackSymbols: [String] {
-#if os(Android) || os(OpenBSD)
+#if os(Android) || os(OpenBSD) || canImport(Musl) || os(WASI)
         return []
 #elseif os(Windows)
         let hProcess: HANDLE = GetCurrentProcess()
         SymSetOptions(DWORD(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS))
         if !SymInitializeW(hProcess, nil, true) {
-          return []
+            return []
         }
         return backtraceAddresses { (addresses, count) in
-          var symbols: [String] = []
-
-          let addresses: UnsafeMutableBufferPointer<PVOID?> =
-              UnsafeMutableBufferPointer<PVOID?>(start: addresses, count: count)
-          withUnsafeTemporaryAllocation(byteCount: MemoryLayout<SYMBOL_INFO>.size + 127,
-                                        alignment: 8) { buffer in
-            let pSymbolInfo: UnsafeMutablePointer<SYMBOL_INFO> =
+            var symbols: [String] = []
+            
+            let addresses: UnsafeMutableBufferPointer<PVOID?> =
+            UnsafeMutableBufferPointer<PVOID?>(start: addresses, count: count)
+            withUnsafeTemporaryAllocation(byteCount: MemoryLayout<SYMBOL_INFO>.size + 127,
+                                          alignment: 8) { buffer in
+                let pSymbolInfo: UnsafeMutablePointer<SYMBOL_INFO> =
                 buffer.baseAddress!.assumingMemoryBound(to: SYMBOL_INFO.self)
-
-            for address in addresses {
-              pSymbolInfo.pointee.SizeOfStruct =
+                
+                for address in addresses {
+                    pSymbolInfo.pointee.SizeOfStruct =
                     ULONG(MemoryLayout<SYMBOL_INFO>.size)
-              pSymbolInfo.pointee.MaxNameLen = 128
-
-              var dwDisplacement: DWORD64 = 0
-              if SymFromAddr(hProcess, DWORD64(UInt(bitPattern: address)),
-                             &dwDisplacement, &pSymbolInfo.pointee) {
-                symbols.append(String(unsafeUninitializedCapacity: Int(pSymbolInfo.pointee.NameLen) + 1) {
-                  strncpy($0.baseAddress, &pSymbolInfo.pointee.Name, $0.count)
-                  return $0.count
-                })
-              } else {
-                symbols.append("\(address)")
-              }
+                    pSymbolInfo.pointee.MaxNameLen = 128
+                    
+                    var dwDisplacement: DWORD64 = 0
+                    if SymFromAddr(hProcess, DWORD64(UInt(bitPattern: address)),
+                                   &dwDisplacement, &pSymbolInfo.pointee) {
+                        symbols.append(String(unsafeUninitializedCapacity: Int(pSymbolInfo.pointee.NameLen) + 1) {
+                            strncpy_s($0.baseAddress, $0.count, &pSymbolInfo.pointee.Name, $0.count)
+                            return $0.count
+                        })
+                    } else {
+                        if let address {
+                            symbols.append("\(address)")
+                        } else {
+                            symbols.append("<unknown address>")
+                        }
+                    }
+                }
             }
-          }
-
-          return symbols
+            
+            return symbols
         }
 #else
         return backtraceAddresses({ (addrs, count) in
             var symbols: [String] = []
-            if let bs = backtrace_symbols(addrs, Int32(count)) {
+#if os(FreeBSD)
+            let bs = backtrace_symbols(addrs, count)
+#else
+            let bs = backtrace_symbols(addrs, Int32(count))
+#endif
+            if let bs {
                 symbols = UnsafeBufferPointer(start: bs, count: count).map {
                     guard let symbol = $0 else {
                         return "<null>"

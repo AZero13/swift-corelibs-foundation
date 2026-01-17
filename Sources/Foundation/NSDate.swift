@@ -11,6 +11,12 @@
 
 public typealias TimeInterval = Double
 
+internal let kCFDateFormatterNoStyle = CFDateFormatterStyle.noStyle
+internal let kCFDateFormatterShortStyle = CFDateFormatterStyle.shortStyle
+internal let kCFDateFormatterMediumStyle = CFDateFormatterStyle.mediumStyle
+internal let kCFDateFormatterLongStyle = CFDateFormatterStyle.longStyle
+internal let kCFDateFormatterFullStyle = CFDateFormatterStyle.fullStyle
+
 public var NSTimeIntervalSince1970: Double {
     return 978307200.0
 }
@@ -30,7 +36,7 @@ extension timeval {
 }
 #endif
 
-open class NSDate : NSObject, NSCopying, NSSecureCoding, NSCoding {
+open class NSDate : NSObject, NSCopying, NSSecureCoding, NSCoding, @unchecked Sendable {
     typealias CFType = CFDate
     
     open override var hash: Int {
@@ -153,23 +159,23 @@ open class NSDate : NSObject, NSCopying, NSSecureCoding, NSCoding {
 
 extension NSDate {
     
-    open func timeIntervalSince(_ anotherDate: Date) -> TimeInterval {
+    public func timeIntervalSince(_ anotherDate: Date) -> TimeInterval {
         return self.timeIntervalSinceReferenceDate - anotherDate.timeIntervalSinceReferenceDate
     }
     
-    open var timeIntervalSinceNow: TimeInterval {
+    public var timeIntervalSinceNow: TimeInterval {
         return timeIntervalSince(Date())
     }
     
-    open var timeIntervalSince1970: TimeInterval {
+    public var timeIntervalSince1970: TimeInterval {
         return timeIntervalSinceReferenceDate + NSTimeIntervalSince1970
     }
     
-    open func addingTimeInterval(_ ti: TimeInterval) -> Date {
+    public func addingTimeInterval(_ ti: TimeInterval) -> Date {
         return Date(timeIntervalSinceReferenceDate:_timeIntervalSinceReferenceDate + ti)
     }
     
-    open func earlierDate(_ anotherDate: Date) -> Date {
+    public func earlierDate(_ anotherDate: Date) -> Date {
         if self.timeIntervalSinceReferenceDate < anotherDate.timeIntervalSinceReferenceDate {
             return Date(timeIntervalSinceReferenceDate: timeIntervalSinceReferenceDate)
         } else {
@@ -177,7 +183,7 @@ extension NSDate {
         }
     }
     
-    open func laterDate(_ anotherDate: Date) -> Date {
+    public func laterDate(_ anotherDate: Date) -> Date {
         if self.timeIntervalSinceReferenceDate < anotherDate.timeIntervalSinceReferenceDate {
             return anotherDate
         } else {
@@ -185,7 +191,7 @@ extension NSDate {
         }
     }
     
-    open func compare(_ other: Date) -> ComparisonResult {
+    public func compare(_ other: Date) -> ComparisonResult {
         let t1 = self.timeIntervalSinceReferenceDate
         let t2 = other.timeIntervalSinceReferenceDate
         if t1 < t2 {
@@ -197,19 +203,19 @@ extension NSDate {
         }
     }
     
-    open func isEqual(to otherDate: Date) -> Bool {
+    public func isEqual(to otherDate: Date) -> Bool {
         return timeIntervalSinceReferenceDate == otherDate.timeIntervalSinceReferenceDate
     }
 }
 
 extension NSDate {
     internal static let _distantFuture = Date(timeIntervalSinceReferenceDate: 63113904000.0)
-    open class var distantFuture: Date {
+    public class var distantFuture: Date {
         return _distantFuture
     }
     
     internal static let _distantPast = Date(timeIntervalSinceReferenceDate: -63113904000.0)
-    open class var distantPast: Date {
+    public class var distantPast: Date {
         return _distantPast
     }
     
@@ -226,38 +232,23 @@ extension NSDate {
     }
 }
 
-extension NSDate: _SwiftBridgeable {
-    typealias SwiftType = Date
-    var _swiftObject: Date {
-        return Date(timeIntervalSinceReferenceDate: timeIntervalSinceReferenceDate)
+extension Date : CustomPlaygroundDisplayConvertible {
+    public var playgroundDescription: Any {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .short
+        return df.string(from: self)
     }
 }
 
-extension CFDate : _NSBridgeable, _SwiftBridgeable {
-    typealias NSType = NSDate
-    typealias SwiftType = Date
-    
-    internal var _nsObject: NSType { return unsafeBitCast(self, to: NSType.self) }
-    internal var _swiftObject: Date { return _nsObject._swiftObject }
-}
-
-extension Date : _NSBridgeable {
-    typealias NSType = NSDate
-    typealias CFType = CFDate
-    
-    internal var _nsObject: NSType { return NSDate(timeIntervalSinceReferenceDate: timeIntervalSinceReferenceDate) }
-    internal var _cfObject: CFType { return _nsObject._cfObject }
-}
-
-
-open class NSDateInterval : NSObject, NSCopying, NSSecureCoding {
+open class NSDateInterval : NSObject, NSCopying, NSSecureCoding, @unchecked Sendable {
     
     
     /*
      NSDateInterval represents a closed date interval in the form of [startDate, endDate].  It is possible for the start and end dates to be the same with a duration of 0.  NSDateInterval does not support reverse intervals i.e. intervals where the duration is less than 0 and the end date occurs earlier in time than the start date.
      */
     
-    open private(set) var startDate: Date
+    public let startDate: Date
     
     open var endDate: Date {
         get {
@@ -269,7 +260,7 @@ open class NSDateInterval : NSObject, NSCopying, NSSecureCoding {
         }
     }
     
-    open private(set) var duration: TimeInterval
+    public let duration: TimeInterval
     
     
     // This method initializes an NSDateInterval object with start and end dates set to the current date and the duration set to 0.
@@ -399,13 +390,15 @@ open class NSDateInterval : NSObject, NSCopying, NSSecureCoding {
     open func contains(_ date: Date) -> Bool {
         let timeIntervalForGivenDate = date.timeIntervalSinceReferenceDate
         let timeIntervalForSelfStart = startDate.timeIntervalSinceReferenceDate
-        let timeIntervalforSelfEnd = endDate.timeIntervalSinceReferenceDate
-        if (timeIntervalForGivenDate >= timeIntervalForSelfStart) && (timeIntervalForGivenDate <= timeIntervalforSelfEnd) {
+        let timeIntervalForSelfEnd = endDate.timeIntervalSinceReferenceDate
+        if (timeIntervalForGivenDate >= timeIntervalForSelfStart) && (timeIntervalForGivenDate <= timeIntervalForSelfEnd) {
             return true
         }
         return false
     }
 }
+
+// MARK: - Bridging
 
 extension NSDate : _StructTypeBridgeable {
     public typealias _StructType = Date
@@ -429,3 +422,49 @@ extension NSDateInterval : _SwiftBridgeable {
     }
 }
 
+extension NSDate: _SwiftBridgeable {
+    typealias SwiftType = Date
+    var _swiftObject: Date {
+        return Date(timeIntervalSinceReferenceDate: timeIntervalSinceReferenceDate)
+    }
+}
+
+extension CFDate : _NSBridgeable, _SwiftBridgeable {
+    typealias NSType = NSDate
+    typealias SwiftType = Date
+    
+    internal var _nsObject: NSType { return unsafeBitCast(self, to: NSType.self) }
+    internal var _swiftObject: Date { return _nsObject._swiftObject }
+}
+
+extension Date : _NSBridgeable {
+    typealias NSType = NSDate
+    typealias CFType = CFDate
+    
+    internal var _nsObject: NSType { return NSDate(timeIntervalSinceReferenceDate: timeIntervalSinceReferenceDate) }
+    internal var _cfObject: CFType { return _nsObject._cfObject }
+}
+
+extension Date : _ObjectiveCBridgeable {
+    @_semantics("convertToObjectiveC")
+    public func _bridgeToObjectiveC() -> NSDate {
+        return NSDate(timeIntervalSinceReferenceDate: timeIntervalSinceReferenceDate)
+    }
+    
+    public static func _forceBridgeFromObjectiveC(_ x: NSDate, result: inout Date?) {
+        if !_conditionallyBridgeFromObjectiveC(x, result: &result) {
+            fatalError("Unable to bridge \(NSDate.self) to \(self)")
+        }
+    }
+    
+    public static func _conditionallyBridgeFromObjectiveC(_ x: NSDate, result: inout Date?) -> Bool {
+        result = Date(timeIntervalSinceReferenceDate: x.timeIntervalSinceReferenceDate)
+        return true
+    }
+    
+    public static func _unconditionallyBridgeFromObjectiveC(_ source: NSDate?) -> Date {
+        var result: Date? = nil
+        _forceBridgeFromObjectiveC(source!, result: &result)
+        return result!
+    }
+}

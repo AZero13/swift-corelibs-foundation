@@ -10,7 +10,9 @@
 @_implementationOnly import CoreFoundation
 
 #if canImport(Glibc)
-import Glibc
+@preconcurrency import Glibc
+#elseif canImport(Bionic)
+@preconcurrency import Bionic
 #endif
 
 #if os(Windows)
@@ -22,11 +24,24 @@ public protocol NSLocking {
     func unlock()
 }
 
+extension NSLocking {
+    @_alwaysEmitIntoClient
+    @_disfavoredOverload
+    public func withLock<R>(_ body: () throws -> R) rethrows -> R {
+        self.lock()
+        defer {
+            self.unlock()
+        }
+
+        return try body()
+    }
+}
+
 #if os(Windows)
 private typealias _MutexPointer = UnsafeMutablePointer<SRWLOCK>
 private typealias _RecursiveMutexPointer = UnsafeMutablePointer<CRITICAL_SECTION>
 private typealias _ConditionVariablePointer = UnsafeMutablePointer<CONDITION_VARIABLE>
-#elseif CYGWIN || os(OpenBSD)
+#elseif CYGWIN || os(OpenBSD) || os(FreeBSD)
 private typealias _MutexPointer = UnsafeMutablePointer<pthread_mutex_t?>
 private typealias _RecursiveMutexPointer = UnsafeMutablePointer<pthread_mutex_t?>
 private typealias _ConditionVariablePointer = UnsafeMutablePointer<pthread_cond_t?>
@@ -36,7 +51,7 @@ private typealias _RecursiveMutexPointer = UnsafeMutablePointer<pthread_mutex_t>
 private typealias _ConditionVariablePointer = UnsafeMutablePointer<pthread_cond_t>
 #endif
 
-open class NSLock: NSObject, NSLocking {
+open class NSLock: NSObject, NSLocking, @unchecked Sendable {
     internal var mutex = _MutexPointer.allocate(capacity: 1)
 #if os(macOS) || os(iOS) || os(Windows)
     private var timeoutCond = _ConditionVariablePointer.allocate(capacity: 1)
@@ -44,7 +59,9 @@ open class NSLock: NSObject, NSLocking {
 #endif
 
     public override init() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         InitializeSRWLock(mutex)
         InitializeConditionVariable(timeoutCond)
         InitializeSRWLock(timeoutMutex)
@@ -58,7 +75,9 @@ open class NSLock: NSObject, NSLocking {
     }
     
     deinit {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         // SRWLocks do not need to be explicitly destroyed
 #else
         pthread_mutex_destroy(mutex)
@@ -70,16 +89,22 @@ open class NSLock: NSObject, NSLocking {
 #endif
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func lock() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         AcquireSRWLockExclusive(mutex)
 #else
         pthread_mutex_lock(mutex)
 #endif
     }
 
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func unlock() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         ReleaseSRWLockExclusive(mutex)
         AcquireSRWLockExclusive(timeoutMutex)
         WakeAllConditionVariable(timeoutCond)
@@ -95,16 +120,23 @@ open class NSLock: NSObject, NSLocking {
 #endif
     }
 
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func `try`() -> Bool {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+        return true
+#elseif os(Windows)
         return TryAcquireSRWLockExclusive(mutex) != 0
 #else
         return pthread_mutex_trylock(mutex) == 0
 #endif
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func lock(before limit: Date) -> Bool {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         if TryAcquireSRWLockExclusive(mutex) != 0 {
           return true
         }
@@ -114,17 +146,16 @@ open class NSLock: NSObject, NSLocking {
         }
 #endif
 
-#if os(macOS) || os(iOS) || os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+        return true
+#elseif os(macOS) || os(iOS) || os(Windows)
         return timedLock(mutex: mutex, endTime: limit, using: timeoutCond, with: timeoutMutex)
 #else
         guard var endTime = timeSpecFrom(date: limit) else {
             return false
         }
-#if os(WASI)
-        return true
-#else
         return pthread_mutex_timedlock(mutex, &endTime) == 0
-#endif
 #endif
     }
 
@@ -139,8 +170,8 @@ extension NSLock {
     }
 }
 
-#if !os(WASI)
-open class NSConditionLock : NSObject, NSLocking {
+#if _runtime(_multithreaded)
+open class NSConditionLock : NSObject, NSLocking, @unchecked Sendable {
     internal var _cond = NSCondition()
     internal var _value: Int
     internal var _thread: _swift_CFThreadRef?
@@ -153,10 +184,12 @@ open class NSConditionLock : NSObject, NSLocking {
         _value = condition
     }
 
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func lock() {
         let _ = lock(before: Date.distantFuture)
     }
 
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func unlock() {
         _cond.lock()
 #if os(Windows)
@@ -172,18 +205,22 @@ open class NSConditionLock : NSObject, NSLocking {
         return _value
     }
 
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func lock(whenCondition condition: Int) {
         let _ = lock(whenCondition: condition, before: Date.distantFuture)
     }
 
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func `try`() -> Bool {
         return lock(before: Date.distantPast)
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func tryLock(whenCondition condition: Int) -> Bool {
         return lock(whenCondition: condition, before: Date.distantPast)
     }
 
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func unlock(withCondition condition: Int) {
         _cond.lock()
 #if os(Windows)
@@ -196,6 +233,7 @@ open class NSConditionLock : NSObject, NSLocking {
         _cond.unlock()
     }
 
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func lock(before limit: Date) -> Bool {
         _cond.lock()
         while _thread != nil {
@@ -213,6 +251,7 @@ open class NSConditionLock : NSObject, NSLocking {
         return true
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func lock(whenCondition condition: Int, before limit: Date) -> Bool {
         _cond.lock()
         while _thread != nil || _value != condition {
@@ -234,7 +273,7 @@ open class NSConditionLock : NSObject, NSLocking {
 }
 #endif
 
-open class NSRecursiveLock: NSObject, NSLocking {
+open class NSRecursiveLock: NSObject, NSLocking, @unchecked Sendable {
     internal var mutex = _RecursiveMutexPointer.allocate(capacity: 1)
 #if os(macOS) || os(iOS) || os(Windows)
     private var timeoutCond = _ConditionVariablePointer.allocate(capacity: 1)
@@ -243,19 +282,21 @@ open class NSRecursiveLock: NSObject, NSLocking {
 
     public override init() {
         super.init()
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         InitializeCriticalSection(mutex)
         InitializeConditionVariable(timeoutCond)
         InitializeSRWLock(timeoutMutex)
 #else
-#if CYGWIN || os(OpenBSD)
+#if CYGWIN || os(OpenBSD) || os(FreeBSD)
         var attrib : pthread_mutexattr_t? = nil
 #else
         var attrib = pthread_mutexattr_t()
 #endif
         withUnsafeMutablePointer(to: &attrib) { attrs in
             pthread_mutexattr_init(attrs)
-#if os(OpenBSD)
+#if os(OpenBSD) || os(FreeBSD)
             let type = Int32(PTHREAD_MUTEX_RECURSIVE.rawValue)
 #else
             let type = Int32(PTHREAD_MUTEX_RECURSIVE)
@@ -271,7 +312,9 @@ open class NSRecursiveLock: NSObject, NSLocking {
     }
     
     deinit {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         DeleteCriticalSection(mutex)
 #else
         pthread_mutex_destroy(mutex)
@@ -283,16 +326,22 @@ open class NSRecursiveLock: NSObject, NSLocking {
 #endif
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func lock() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         EnterCriticalSection(mutex)
 #else
         pthread_mutex_lock(mutex)
 #endif
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func unlock() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         LeaveCriticalSection(mutex)
         AcquireSRWLockExclusive(timeoutMutex)
         WakeAllConditionVariable(timeoutCond)
@@ -308,16 +357,23 @@ open class NSRecursiveLock: NSObject, NSLocking {
 #endif
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func `try`() -> Bool {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+        return true
+#elseif os(Windows)
         return TryEnterCriticalSection(mutex)
 #else
         return pthread_mutex_trylock(mutex) == 0
 #endif
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func lock(before limit: Date) -> Bool {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         if TryEnterCriticalSection(mutex) {
             return true
         }
@@ -327,29 +383,30 @@ open class NSRecursiveLock: NSObject, NSLocking {
         }
 #endif
 
-#if os(macOS) || os(iOS) || os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+        return true
+#elseif os(macOS) || os(iOS) || os(Windows)
         return timedLock(mutex: mutex, endTime: limit, using: timeoutCond, with: timeoutMutex)
 #else
         guard var endTime = timeSpecFrom(date: limit) else {
             return false
         }
-#if os(WASI)
-        return true
-#else
         return pthread_mutex_timedlock(mutex, &endTime) == 0
-#endif
 #endif
     }
 
     open var name: String?
 }
 
-open class NSCondition: NSObject, NSLocking {
+open class NSCondition: NSObject, NSLocking, @unchecked Sendable {
     internal var mutex = _MutexPointer.allocate(capacity: 1)
     internal var cond = _ConditionVariablePointer.allocate(capacity: 1)
 
     public override init() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         InitializeSRWLock(mutex)
         InitializeConditionVariable(cond)
 #else
@@ -359,7 +416,9 @@ open class NSCondition: NSObject, NSLocking {
     }
     
     deinit {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         // SRWLock do not need to be explicitly destroyed
 #else
         pthread_mutex_destroy(mutex)
@@ -371,32 +430,45 @@ open class NSCondition: NSObject, NSLocking {
         cond.deallocate()
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func lock() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         AcquireSRWLockExclusive(mutex)
 #else
         pthread_mutex_lock(mutex)
 #endif
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func unlock() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         ReleaseSRWLockExclusive(mutex)
 #else
         pthread_mutex_unlock(mutex)
 #endif
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func wait() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         SleepConditionVariableSRW(cond, mutex, WinSDK.INFINITE, 0)
 #else
         pthread_cond_wait(cond, mutex)
 #endif
     }
 
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func wait(until limit: Date) -> Bool {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+        return true
+#elseif os(Windows)
         return SleepConditionVariableSRW(cond, mutex, timeoutFrom(date: limit), 0)
 #else
         guard var timeout = timeSpecFrom(date: limit) else {
@@ -406,8 +478,11 @@ open class NSCondition: NSObject, NSLocking {
 #endif
     }
     
+    @available(*, noasync, message: "Use async-safe scoped locking instead")
     open func signal() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         WakeConditionVariable(cond)
 #else
         pthread_cond_signal(cond)
@@ -415,7 +490,9 @@ open class NSCondition: NSObject, NSLocking {
     }
     
     open func broadcast() {
-#if os(Windows)
+#if !_runtime(_multithreaded)
+        // noop on no thread platforms
+#elseif os(Windows)
         WakeAllConditionVariable(cond)
 #else
         pthread_cond_broadcast(cond)

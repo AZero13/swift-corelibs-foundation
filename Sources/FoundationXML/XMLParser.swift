@@ -9,15 +9,14 @@
 
 #if os(macOS) || os(iOS) || os(watchOS) || os(tvOS)
 import SwiftFoundation
-import CFXMLInterface
+import _CFXMLInterface
 #else
 import Foundation
-@_implementationOnly import CFXMLInterface
+@_implementationOnly import _CFXMLInterface
 #endif
-@_implementationOnly import CoreFoundation
 
 extension XMLParser {
-    public enum ExternalEntityResolvingPolicy : UInt {
+    public enum ExternalEntityResolvingPolicy : UInt, Sendable {
         case never // default
         case noNetwork
         case sameOriginOnly //only applies to NSXMLParser instances initialized with -initWithContentsOfURL:
@@ -394,16 +393,17 @@ internal func _structuredErrorFunc(_ interface: _CFXMLInterface, error: _CFXMLIn
     }
 }
 
+@available(*, unavailable)
+extension XMLParser : @unchecked Sendable { }
+
 open class XMLParser : NSObject {
     private var _handler: _CFXMLInterfaceSAXHandler
-#if !os(WASI)
     internal var _stream: InputStream?
-#endif
     internal var _data: Data?
 
     internal var _chunkSize = Int(4096 * 32) // a suitably large number for a decent chunk size
     // This chunk of data stores the head of the stream. We know we have enough information for encoding
-    // when there are atleast 4 bytes in here.
+    // when there are at least 4 bytes in here.
     internal var _bomChunk: Data?
     fileprivate var _parserContext: _CFXMLInterfaceParserContext?
     internal var _delegateAborted = false
@@ -412,9 +412,6 @@ open class XMLParser : NSObject {
     
     // initializes the parser with the specified URL.
     public convenience init?(contentsOf url: URL) {
-#if os(WASI)
-        return nil
-#else
         setupXMLParsing()
         if url.isFileURL {
             if let stream = InputStream(url: url) {
@@ -432,7 +429,6 @@ open class XMLParser : NSObject {
                 return nil
             }
         }
-#endif
     }
     
     // create the parser from data
@@ -448,7 +444,6 @@ open class XMLParser : NSObject {
         _CFXMLInterfaceDestroyContext(_parserContext)
     }
     
-#if !os(WASI)
     //create a parser that incrementally pulls data from the specified stream and parses it.
     public init(stream: InputStream) {
         setupXMLParsing()
@@ -456,7 +451,6 @@ open class XMLParser : NSObject {
         _handler = _CFXMLInterfaceCreateSAXHandler()
         _parserContext = nil
     }
-#endif
     
     open weak var delegate: XMLParserDelegate?
     
@@ -467,33 +461,35 @@ open class XMLParser : NSObject {
     open var externalEntityResolvingPolicy: ExternalEntityResolvingPolicy = .never
     
     open var allowedExternalEntityURLs: Set<URL>?
-    
-#if os(WASI)
-    private static var _currentParser: XMLParser?
-#endif
 
-    internal static func currentParser() -> XMLParser? {
-#if os(WASI)
-        return _currentParser
-#else
-        if let current = Thread.current.threadDictionary["__CurrentNSXMLParser"] {
-            return current as? XMLParser
-        } else {
-            return nil
+    #if os(WASI)
+    /// The current parser associated with the current thread. (assuming no multi-threading)
+    /// FIXME: Unify the implementation with the other platforms once we unlock `threadDictionary`
+    ///        or migrate to `FoundationEssentials._ThreadLocal`.
+    private static nonisolated(unsafe) var _currentParser: XMLParser? = nil
+    #else
+    /// The current parser associated with the current thread.
+    private static var _currentParser: XMLParser? {
+        get {
+            return Thread.current.threadDictionary["__CurrentNSXMLParser"] as? XMLParser
         }
-#endif
+        set {
+            Thread.current.threadDictionary["__CurrentNSXMLParser"] = newValue
+        }
     }
-    
-    internal static func setCurrentParser(_ parser: XMLParser?) {
-#if os(WASI)
+    #endif
+
+    /// The current parser associated with the current thread.
+    internal static func currentParser() -> XMLParser? {
+        return _currentParser
+    }
+
+    /// Execute the given closure with the current parser set to the given parser.
+    internal static func withCurrentParser<R>(_ parser: XMLParser, _ body: () -> R) -> R {
+        let oldParser = _currentParser
         _currentParser = parser
-#else
-        if let p = parser {
-            Thread.current.threadDictionary["__CurrentNSXMLParser"] = p
-        } else {
-            Thread.current.threadDictionary.removeObject(forKey: "__CurrentNSXMLParser")
-        }
-#endif
+        defer { _currentParser = oldParser }
+        return body()
     }
     
     internal func _handleParseResult(_ parseResult: Int32) -> Bool {
@@ -567,7 +563,6 @@ open class XMLParser : NSObject {
         return result
     }
 
-#if !os(WASI)
     internal func parseFrom(_ stream : InputStream) -> Bool {
         var result = true
 
@@ -596,37 +591,17 @@ open class XMLParser : NSObject {
 
         return result
     }
-#else
-    internal func parse(from data: Data) -> Bool {
-        var result = true
-        var chunkStart = 0
-        var chunkEnd = min(_chunkSize, data.count)
-        while result && chunkStart < chunkEnd {
-            let chunk = data[chunkStart..<chunkEnd]
-            result = parseData(chunk)
-            chunkStart = chunkEnd
-            chunkEnd = min(chunkEnd + _chunkSize, data.count)
-        }
-        return result
-    }
-#endif
 
     // called to start the event-driven parse. Returns YES in the event of a successful parse, and NO in case of error.
     open func parse() -> Bool {
-#if os(WASI)
-        return _data.map { parse(from: $0) } ?? false
-#else
-        XMLParser.setCurrentParser(self)
-        defer { XMLParser.setCurrentParser(nil) }
-
-        if _stream != nil {
-            return parseFrom(_stream!)
-        } else if _data != nil {
-            return parseData(_data!, lastChunkOfData: true)
+        return Self.withCurrentParser(self) {
+            if _stream != nil {
+                return parseFrom(_stream!)
+            } else if _data != nil {
+                return parseData(_data!, lastChunkOfData: true)
+            }
+            return false
         }
-
-        return false
-#endif
     }
     
     // called by the delegate to stop the parse. The delegate will get an error message sent to it.
@@ -812,7 +787,7 @@ extension XMLParser {
     public static let errorDomain: String = "NSXMLParserErrorDomain" // for use with NSError.
 
     // Error reporting
-    public enum ErrorCode : Int {
+    public enum ErrorCode : Int, Sendable {
         
         
         case internalError

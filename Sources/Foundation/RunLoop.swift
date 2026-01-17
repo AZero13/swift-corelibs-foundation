@@ -7,11 +7,7 @@
 // See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 
-#if os(Linux) || os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(OpenBSD)
-import CoreFoundation
-#else
 @_implementationOnly import CoreFoundation
-#endif
 
 internal let kCFRunLoopEntry = CFRunLoopActivity.entry.rawValue
 internal let kCFRunLoopBeforeTimers = CFRunLoopActivity.beforeTimers.rawValue
@@ -22,8 +18,8 @@ internal let kCFRunLoopExit = CFRunLoopActivity.exit.rawValue
 internal let kCFRunLoopAllActivities = CFRunLoopActivity.allActivities.rawValue
 
 extension RunLoop {
-    public struct Mode : RawRepresentable, Equatable, Hashable {
-        public private(set) var rawValue: String
+    public struct Mode : RawRepresentable, Equatable, Hashable, Sendable {
+        public let rawValue: String
 
         public init(_ rawValue: String) {
             self.rawValue = rawValue
@@ -51,10 +47,34 @@ extension RunLoop.Mode {
     }
 }
 
+#if !canImport(Dispatch)
+
+@available(*, unavailable)
+extension RunLoop : @unchecked Sendable { }
+
+open class RunLoop: NSObject {
+    @available(*, unavailable, message: "RunLoop is not available on WASI")
+    open class var current: RunLoop {
+        fatalError("RunLoop is not available on WASI")
+    }
+
+    @available(*, unavailable, message: "RunLoop is not available on WASI")
+    open class var main: RunLoop {
+        fatalError("RunLoop is not available on WASI")
+    }
+
+    internal final var currentCFRunLoop: CFRunLoop { NSUnsupported() }
+}
+
+#else
+
 internal func _NSRunLoopNew(_ cf: CFRunLoop) -> Unmanaged<AnyObject> {
     let rl = Unmanaged<RunLoop>.passRetained(RunLoop(cfObject: cf))
     return unsafeBitCast(rl, to: Unmanaged<AnyObject>.self) // this retain is balanced on the other side of the CF fence
 }
+
+@available(*, unavailable)
+extension RunLoop : @unchecked Sendable { }
 
 open class RunLoop: NSObject {
     internal var _cfRunLoopStorage : AnyObject!
@@ -63,7 +83,8 @@ open class RunLoop: NSObject {
         set { _cfRunLoopStorage = newValue }
     }
 
-    internal static var _mainRunLoop: RunLoop = {
+    // TODO: We need some kind API to expose only the Sendable part of the main run loop
+    internal static nonisolated(unsafe) var _mainRunLoop: RunLoop = {
         let cfObject: CFRunLoop! = CFRunLoopGetMain()
 #if os(Windows)
         // Enable the main runloop on Windows to process the Windows UI events.
@@ -78,6 +99,7 @@ open class RunLoop: NSObject {
         _cfRunLoopStorage = cfObject
     }
 
+    @available(*, noasync)
     open class var current: RunLoop {
         return _CFRunLoopGet2(CFRunLoopGetCurrent()) as! RunLoop
     }
@@ -97,22 +119,21 @@ open class RunLoop: NSObject {
     // On platforms where it's available, getCFRunLoop() can be overridden and we use it below.
     // Make sure we honor the override -- var currentCFRunLoop will do so on platforms where overrides are available.
 
-    #if os(Linux) || os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(OpenBSD)
+    // TODO: This has been removed as public API in port to the package, because CoreFoundation cannot be available as both toolchain "CoreFoundation" and package "_CoreFoundation"
+    #if os(Linux) || os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(OpenBSD) || os(FreeBSD)
     internal var currentCFRunLoop: CFRunLoop { getCFRunLoop() }
 
-    @available(*, deprecated, message: "Directly accessing the run loop may cause your code to not become portable in the future.")
-    open func getCFRunLoop() -> CFRunLoop {
+    internal func getCFRunLoop() -> CFRunLoop {
         return _cfRunLoop
     }
     #else
     internal final var currentCFRunLoop: CFRunLoop { _cfRunLoop }
 
-    @available(*, unavailable, message: "Core Foundation is not available on your platform.")
-    open func getCFRunLoop() -> Never {
+    internal func getCFRunLoop() -> Never {
         fatalError()
     }
     #endif
-
+    
     open func add(_ timer: Timer, forMode mode: RunLoop.Mode) {
         CFRunLoopAddTimer(_cfRunLoop, timer._cfObject, mode._cfStringUniquingKnown)
     }
@@ -129,8 +150,10 @@ open class RunLoop: NSObject {
                 
                 let shouldStartMonitoring = monitoredPortObservers[aPort] == nil
                 if shouldStartMonitoring {
-                    monitoredPortObservers[aPort] = NotificationCenter.default.addObserver(forName: Port.didBecomeInvalidNotification, object: aPort, queue: nil, using: { [weak self] (notification) in
-                        self?.portDidInvalidate(aPort)
+                    nonisolated(unsafe) let strongNonisolatedSelf = self
+                    nonisolated(unsafe) let nonisolatedPort = aPort
+                    monitoredPortObservers[aPort] = NotificationCenter.default.addObserver(forName: Port.didBecomeInvalidNotification, object: aPort, queue: nil, using: { (notification) in
+                        strongNonisolatedSelf.portDidInvalidate(nonisolatedPort)
                     })
                 }
                 
@@ -196,6 +219,7 @@ open class RunLoop: NSObject {
         return Date(timeIntervalSinceReferenceDate: nextTimerFireAbsoluteTime)
     }
 
+    @available(*, noasync)
     open func acceptInput(forMode mode: String, before limitDate: Date) {
         if _cfRunLoop !== CFRunLoopGetCurrent() {
             return
@@ -206,15 +230,17 @@ open class RunLoop: NSObject {
 }
 
 extension RunLoop {
-
+    @available(*, noasync)
     public func run() {
         while run(mode: .default, before: Date.distantFuture) { }
     }
 
+    @available(*, noasync)
     public func run(until limitDate: Date) {
         while run(mode: .default, before: limitDate) && limitDate.timeIntervalSinceReferenceDate > CFAbsoluteTimeGetCurrent() { }
     }
 
+    @available(*, noasync)
     public func run(mode: RunLoop.Mode, before limitDate: Date) -> Bool {
         if _cfRunLoop !== CFRunLoopGetCurrent() {
             return false
@@ -230,11 +256,11 @@ extension RunLoop {
         return true
     }
 
-    public func perform(inModes modes: [RunLoop.Mode], block: @escaping () -> Void) {
+    public func perform(inModes modes: [RunLoop.Mode], block: @Sendable @escaping () -> Void) {
         CFRunLoopPerformBlock(currentCFRunLoop, (modes.map { $0._cfStringUniquingKnown })._cfObject, block)
     }
     
-    public func perform(_ block: @escaping () -> Void) {
+    public func perform(_ block: @Sendable @escaping () -> Void) {
         perform(inModes: [.default], block: block)
     }
 }
@@ -242,37 +268,49 @@ extension RunLoop {
 // These exist as SPI for XCTest for now. Do not rely on their contracts or continued existence.
 
 extension RunLoop {
-    @available(*, deprecated, message: "For XCTest use only.")
+    // TODO: Switch XCTest to SPI Annotation
+    // @available(*, deprecated, message: "For XCTest use only.")
     public func _stop() {
         CFRunLoopStop(currentCFRunLoop)
     }
     
-    @available(*, deprecated, message: "For XCTest use only.")
+    // TODO: Switch XCTest to SPI Annotation
+    // @available(*, deprecated, message: "For XCTest use only.")
     public func _observe(_ activities: _Activities, in mode: RunLoop.Mode = .default, repeats: Bool = true, order: Int = 0, handler: @escaping (_Activity) -> Void) -> _Observer {
         let observer = _Observer(activities: activities, repeats: repeats, order: order, handler: handler)
         CFRunLoopAddObserver(self.currentCFRunLoop, observer.cfObserver, mode._cfStringUniquingKnown)
         return observer
     }
     
-    @available(*, deprecated, message: "For XCTest use only.")
+    // TODO: Switch XCTest to SPI Annotation
+    // @available(*, deprecated, message: "For XCTest use only.")
     public func _observe(_ activity: _Activity, in mode: RunLoop.Mode = .default, repeats: Bool = true, order: Int = 0, handler: @escaping (_Activity) -> Void) -> _Observer {
         return _observe(_Activities(activity), in: mode, repeats: repeats, order: order, handler: handler)
     }
     
-    @available(*, deprecated, message: "For XCTest use only.")
+    // TODO: Switch XCTest to SPI Annotation
+    // @available(*, deprecated, message: "For XCTest use only.")
     public func _add(_ source: _Source, forMode mode: RunLoop.Mode) {
         CFRunLoopAddSource(_cfRunLoop, source.cfSource, mode._cfStringUniquingKnown)
     }
     
-    @available(*, deprecated, message: "For XCTest use only.")
-    open func _remove(_ source: _Source, for mode: RunLoop.Mode) {
+    // TODO: Switch XCTest to SPI Annotation
+    // @available(*, deprecated, message: "For XCTest use only.")
+    public func _remove(_ source: _Source, for mode: RunLoop.Mode) {
         CFRunLoopRemoveSource(_cfRunLoop, source.cfSource, mode._cfStringUniquingKnown)
     }
 }
 
+@available(*, unavailable)
+extension RunLoop._Observer : Sendable { }
+
+@available(*, unavailable)
+extension RunLoop._Source : Sendable { }
+
 extension RunLoop {
-    @available(*, deprecated, message: "For XCTest use only.")
-    public enum _Activity: UInt {
+    // TODO: Switch XCTest to SPI Annotation
+    // @available(*, deprecated, message: "For XCTest use only.")
+    public enum _Activity: UInt, Sendable {
         // These must match CFRunLoopActivity.
         case entry = 0
         case beforeTimers = 1
@@ -282,8 +320,9 @@ extension RunLoop {
         case exit = 128
     }
     
-    @available(*, deprecated, message: "For XCTest use only.")
-    public struct _Activities: OptionSet {
+    // TODO: Switch XCTest to SPI Annotation
+    // @available(*, deprecated, message: "For XCTest use only.")
+    public struct _Activities: OptionSet, Sendable {
         public var rawValue: UInt
         public init(rawValue: UInt) {
             self.rawValue = rawValue
@@ -302,10 +341,11 @@ extension RunLoop {
         public static let allActivities = _Activities(rawValue: 0x0FFFFFFF)
     }
     
-    @available(*, deprecated, message: "For XCTest use only.")
+    // TODO: Switch XCTest to SPI Annotation
+    // @available(*, deprecated, message: "For XCTest use only.")
     public class _Observer {
         fileprivate let _cfObserverStorage: AnyObject
-        fileprivate var cfObserver: CFRunLoopObserver { unsafeBitCast(_cfObserverStorage, to: CFRunLoopObserver.self) }
+        fileprivate var cfObserver: CFRunLoopObserver { unsafeDowncast(_cfObserverStorage, to: CFRunLoopObserver.self) }
         
         fileprivate init(activities: _Activities, repeats: Bool, order: Int, handler: @escaping (_Activity) -> Void) {
             self._cfObserverStorage = CFRunLoopObserverCreateWithHandler(kCFAllocatorSystemDefault, CFOptionFlags(activities.rawValue), repeats, CFIndex(order), { (cfObserver, cfActivity) in
@@ -331,7 +371,8 @@ extension RunLoop {
         }
     }
     
-    @available(*, deprecated, message: "For XCTest use only.")
+    // TODO: Switch XCTest to SPI Annotation
+    // @available(*, deprecated, message: "For XCTest use only.")
     open class _Source: NSObject {
         fileprivate var _cfSourceStorage: AnyObject!
         
@@ -421,3 +462,5 @@ extension RunLoop._Source {
       unsafeBitCast(_cfSourceStorage, to: CFRunLoopSource.self)
     }
 }
+
+#endif // canImport(Dispatch)

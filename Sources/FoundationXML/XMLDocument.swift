@@ -12,8 +12,7 @@ import SwiftFoundation
 #else
 import Foundation
 #endif
-@_implementationOnly import CoreFoundation
-@_implementationOnly import CFXMLInterface
+@_implementationOnly import _CFXMLInterface
 
 // Input options
 //  NSXMLNodeOptionsNone
@@ -48,7 +47,7 @@ extension XMLDocument {
         @constant XMLDocument.ContentKind.html Outputs empty tags without a close tag, eg <br>
         @constant XMLDocument.ContentKind.text Output the string value of the document
     */
-    public enum ContentKind : UInt {
+    public enum ContentKind : UInt, Sendable {
 
         case xml
         case xhtml
@@ -102,7 +101,7 @@ open class XMLDocument : XMLNode {
     */
     public init(data: Data, options mask: XMLNode.Options = []) throws {
         setupXMLParsing()
-        let docPtr = _CFXMLDocPtrFromDataWithOptions(unsafeBitCast(data as NSData, to: CFData.self), UInt32(mask.rawValue))
+        let docPtr = _CFXMLDocPtrFromDataWithOptions(unsafeBitCast(data._bridgeToObjectiveC(), to: CFData.self), UInt32(mask.rawValue))
         super.init(ptr: _CFXMLNodePtr(docPtr))
 
         if mask.contains(.documentValidate) {

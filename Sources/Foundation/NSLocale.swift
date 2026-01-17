@@ -9,33 +9,219 @@
 
 
 @_implementationOnly import CoreFoundation
+@_spi(SwiftCorelibsFoundation) @_exported import FoundationEssentials
+@_exported import FoundationInternationalization
 
-open class NSLocale: NSObject, NSCopying, NSSecureCoding {
-    typealias CFType = CFLocale
-
-    // struct __CFLocale
-    private var _base = _CFInfo(typeID: CFLocaleGetTypeID())
-    private var _identifier: UnsafeMutableRawPointer? = nil
-    private var _cache: UnsafeMutableRawPointer? = nil
-    private var _prefs: UnsafeMutableRawPointer? = nil
-    private var _lock: _NSCFLock = _NSCFLockInit()
-    private var _nullLocale: Bool = false
-
-    internal final var _cfObject: CFType {
-        return unsafeBitCast(self, to: CFType.self)
+open class NSLocale: NSObject, NSCopying, NSSecureCoding, @unchecked Sendable {
+    // Our own data
+    let _locale: Locale
+    
+    internal init(locale: Locale) {
+        _locale = locale
     }
     
     open func object(forKey key: NSLocale.Key) -> Any? {
-        return __SwiftValue.fetch(CFLocaleGetValue(_cfObject, key.rawValue._cfObject))
+        switch key {
+        case .identifier: return self.localeIdentifier
+        case .languageCode: return self.languageCode
+        case .countryCode: return self.countryCode
+        case .scriptCode: return self.scriptCode
+        case .variantCode: return self.variantCode
+#if FOUNDATION_FRAMEWORK
+        case .exemplarCharacterSet: return self.exemplarCharacterSet
+#endif
+        case .calendarIdentifier: return self.calendarIdentifier
+        case .calendar: return _locale.calendar
+        case .collationIdentifier: return self.collationIdentifier
+        case .usesMetricSystem: return self.usesMetricSystem
+#if FOUNDATION_FRAMEWORK
+        case .measurementSystem: return self.measurementSystem
+#endif
+        case .decimalSeparator: return self.decimalSeparator
+        case .groupingSeparator: return self.groupingSeparator
+        case .currencySymbol: return self.currencySymbol
+        case .currencyCode: return self.currencyCode
+        // Foundation framework only
+        /*
+        case .collatorIdentifier, .cfLocaleCollatorID: return self.collatorIdentifier
+        */
+        case .quotationBeginDelimiterKey: return self.quotationBeginDelimiter
+        case .quotationEndDelimiterKey: return self.quotationEndDelimiter
+        case .alternateQuotationBeginDelimiterKey: return self.alternateQuotationBeginDelimiter
+        case .alternateQuotationEndDelimiterKey: return self.alternateQuotationEndDelimiter
+        // Foundation framework only
+        /*
+        case .languageIdentifier: return self.languageIdentifier
+        */
+        default:
+            return nil
+        }
     }
     
     open func displayName(forKey key: Key, value: String) -> String? {
-        return CFLocaleCopyDisplayNameForPropertyValue(_cfObject, key.rawValue._cfObject, value._cfObject)?._swiftObject
+        switch key {
+        case .identifier: return self._nullableLocalizedString(forLocaleIdentifier: value)
+        case .languageCode: return self.localizedString(forLanguageCode: value)
+        case .countryCode: return self.localizedString(forCountryCode: value)
+        case .scriptCode: return self.localizedString(forScriptCode: value)
+        case .variantCode: return self.localizedString(forVariantCode: value)
+#if FOUNDATION_FRAMEWORK
+        case .exemplarCharacterSet: return nil
+#endif
+        case .calendarIdentifier, .calendar: return self.localizedString(forCalendarIdentifier: value)
+        case .collationIdentifier: return self.localizedString(forCollationIdentifier: value)
+        case .usesMetricSystem: return nil
+        case .measurementSystem: return nil
+        case .decimalSeparator: return nil
+        case .groupingSeparator: return nil
+        case .currencySymbol: return self.localizedString(forCurrencySymbol: value)
+        case .currencyCode: return self.localizedString(forCurrencyCode: value)
+        case .collatorIdentifier: return self.localizedString(forCollatorIdentifier: value)
+        case .quotationBeginDelimiterKey: return nil
+        case .quotationEndDelimiterKey: return nil
+        case .alternateQuotationBeginDelimiterKey: return nil
+        case .alternateQuotationEndDelimiterKey: return nil
+        default:
+            return nil
+        }
     }
     
+    var localeIdentifier: String {
+        _locale.identifier
+    }
+
+    var languageCode: String {
+        _locale.languageCode ?? ""
+    }
+
+    var languageIdentifier: String {
+        let langIdentifier = _locale.language._components._identifier
+        let localeWithOnlyLanguage = Locale(identifier: langIdentifier)
+        return localeWithOnlyLanguage.identifier(.bcp47)
+    }
+
+    var countryCode: String? {
+        _locale.region?.identifier
+    }
+
+    var regionCode: String? {
+        _locale.region?.identifier
+    }
+
+    var scriptCode: String? {
+        _locale.scriptCode
+    }
+
+    var variantCode: String? {
+        _locale.variantCode
+    }
+
+    var calendarIdentifier: String {
+        _locale.__calendarIdentifier._cfCalendarIdentifier
+    }
+
+    var collationIdentifier: String? {
+        _locale.collationIdentifier
+    }
+
+    var decimalSeparator: String {
+        _locale.decimalSeparator ?? ""
+    }
+
+    var groupingSeparator: String {
+        _locale.groupingSeparator ?? ""
+    }
+
+    var currencySymbol: String {
+        _locale.currencySymbol ?? ""
+    }
+
+    var currencyCode: String? {
+        _locale.currencyCode
+    }
+
+    var collatorIdentifier: String {
+        _locale.collatorIdentifier ?? ""
+    }
+
+    var quotationBeginDelimiter: String {
+        _locale.quotationBeginDelimiter ?? ""
+    }
+
+    var quotationEndDelimiter: String {
+        _locale.quotationEndDelimiter ?? ""
+    }
+
+    var alternateQuotationBeginDelimiter: String {
+        _locale.alternateQuotationBeginDelimiter ?? ""
+    }
+
+    var alternateQuotationEndDelimiter: String {
+        _locale.alternateQuotationEndDelimiter ?? ""
+    }
+
+#if FOUNDATION_FRAMEWORK
+    var exemplarCharacterSet: CharacterSet {
+        _locale.exemplarCharacterSet ?? CharacterSet()
+    }
+#endif
+
+    var usesMetricSystem: Bool {
+        _locale.usesMetricSystem
+    }
+
+    func localizedString(forLocaleIdentifier localeIdentifier: String) -> String {
+        _nullableLocalizedString(forLocaleIdentifier: localeIdentifier) ?? ""
+    }
+    
+    /// Some CFLocale APIs require the result to remain `nullable`. They can call this directly, where the `localizedString(forLocaleIdentifier:)` entry point can remain (correctly) non-nullable.
+    private func _nullableLocalizedString(forLocaleIdentifier localeIdentifier: String) -> String? {
+        _locale.localizedString(forIdentifier: localeIdentifier)
+    }
+
+    func localizedString(forLanguageCode languageCode: String) -> String? {
+        _locale.localizedString(forLanguageCode: languageCode)
+    }
+
+    func localizedString(forCountryCode countryCode: String) -> String? {
+        _locale.localizedString(forRegionCode: countryCode)
+    }
+
+    func localizedString(forScriptCode scriptCode: String) -> String? {
+        _locale.localizedString(forScriptCode: scriptCode)
+    }
+
+    func localizedString(forVariantCode variantCode: String) -> String? {
+        _locale.localizedString(forVariantCode: variantCode)
+    }
+
+    func localizedString(forCalendarIdentifier calendarIdentifier: String) -> String? {
+        guard let id = NSCalendar.Identifier(string: calendarIdentifier), let id = id._calendarIdentifier else {
+            return nil
+        }
+        return _locale.localizedString(for: id)
+    }
+
+    func localizedString(forCollationIdentifier collationIdentifier: String) -> String? {
+        _locale.localizedString(forCollationIdentifier: collationIdentifier)
+    }
+
+    func localizedString(forCurrencyCode currencyCode: String) -> String? {
+        _locale.localizedString(forCurrencyCode: currencyCode)
+    }
+
+    func localizedString(forCurrencySymbol currencySymbol: String) -> String? {
+        // internal access for SCL-F only
+        _locale._localizedString(forCurrencySymbol: currencySymbol)
+    }
+
+    func localizedString(forCollatorIdentifier collatorIdentifier: String) -> String? {
+        _locale.localizedString(forCollatorIdentifier: collatorIdentifier)
+    }
+
     public init(localeIdentifier string: String) {
+        _locale = Locale(identifier: string)
         super.init()
-        _CFLocaleInit(_cfObject, string._cfObject)
     }
     
     public required convenience init?(coder aDecoder: NSCoder) {
@@ -47,11 +233,7 @@ open class NSLocale: NSObject, NSCopying, NSSecureCoding {
         }
         self.init(localeIdentifier: String._unconditionallyBridgeFromObjectiveC(identifier))
     }
-    
-    deinit {
-        _CFDeinit(self)
-    }
-    
+        
     open override func copy() -> Any {
         return copy(with: nil)
     }
@@ -76,8 +258,7 @@ open class NSLocale: NSObject, NSCopying, NSSecureCoding {
         guard aCoder.allowsKeyedCoding else {
             preconditionFailure("Unkeyed coding is unsupported.")
         }
-        let identifier = CFLocaleGetIdentifier(self._cfObject)._nsObject
-        aCoder.encode(identifier, forKey: "NS.identifier")
+        aCoder.encode(_locale.identifier as NSString, forKey: "NS.identifier")
     }
     
     public static var supportsSecureCoding: Bool {
@@ -86,83 +267,84 @@ open class NSLocale: NSObject, NSCopying, NSSecureCoding {
 }
 
 extension NSLocale {
-    open class var current: Locale {
-        return CFLocaleCopyCurrent()._swiftObject
+    public class var current: Locale {
+        Locale.current
     }
     
-    open class var system: Locale {
-        return CFLocaleGetSystem()._swiftObject
+    public class var system: Locale {
+        Locale(identifier: "")
     }
 }
 
 extension NSLocale {
-    public var localeIdentifier: String {
-        return object(forKey: .identifier) as! String
+    public class var availableLocaleIdentifiers: [String] {
+        Locale.availableIdentifiers
     }
     
-    open class var availableLocaleIdentifiers: [String] {
-        return __SwiftValue.fetch(CFLocaleCopyAvailableLocaleIdentifiers()) as? [String] ?? []
+    public class var isoLanguageCodes: [String] {
+        // Map back from the type to strings
+        Locale.LanguageCode.isoLanguageCodes.map { $0.identifier }
     }
     
-    open class var isoLanguageCodes: [String] {
-        return __SwiftValue.fetch(CFLocaleCopyISOLanguageCodes()) as? [String] ?? []
+    public class var isoCountryCodes: [String] {
+        Locale.Region.isoRegions.map { $0.identifier }
     }
     
-    open class var isoCountryCodes: [String] {
-        return __SwiftValue.fetch(CFLocaleCopyISOCountryCodes()) as? [String] ?? []
+    public class var isoCurrencyCodes: [String] {
+        Locale.Currency.isoCurrencies.map { $0.identifier }
     }
     
-    open class var isoCurrencyCodes: [String] {
-        return __SwiftValue.fetch(CFLocaleCopyISOCurrencyCodes()) as? [String] ?? []
+    public class var commonISOCurrencyCodes: [String] {
+        Locale.commonISOCurrencyCodes
     }
     
-    open class var commonISOCurrencyCodes: [String] {
-        return __SwiftValue.fetch(CFLocaleCopyCommonISOCurrencyCodes()) as? [String] ?? []
+    public class var preferredLanguages: [String] {
+        Locale.preferredLanguages
     }
     
-    open class var preferredLanguages: [String] {
-        return __SwiftValue.fetch(CFLocaleCopyPreferredLanguages()) as? [String] ?? []
+    public class func components(fromLocaleIdentifier string: String) -> [String : String] {
+        __SwiftValue.fetch(CFLocaleCreateComponentsFromLocaleIdentifier(kCFAllocatorSystemDefault, string._cfObject)) as? [String : String] ?? [:] 
     }
     
-    open class func components(fromLocaleIdentifier string: String) -> [String : String] {
-        return __SwiftValue.fetch(CFLocaleCreateComponentsFromLocaleIdentifier(kCFAllocatorSystemDefault, string._cfObject)) as? [String : String] ?? [:] 
+    public class func localeIdentifier(fromComponents dict: [String : String]) -> String {
+        Locale.identifier(fromComponents: dict)
     }
     
-    open class func localeIdentifier(fromComponents dict: [String : String]) -> String {
-        return CFLocaleCreateLocaleIdentifierFromComponents(kCFAllocatorSystemDefault, dict._cfObject)._swiftObject
+    public class func canonicalLocaleIdentifier(from string: String) -> String {
+        Locale.canonicalLanguageIdentifier(from: string)
     }
     
-    open class func canonicalLocaleIdentifier(from string: String) -> String {
-        return CFLocaleCreateCanonicalLocaleIdentifierFromString(kCFAllocatorSystemDefault, string._cfObject)._swiftObject
+    public class func canonicalLanguageIdentifier(from string: String) -> String {
+        Locale.canonicalLanguageIdentifier(from: string)
     }
     
-    open class func canonicalLanguageIdentifier(from string: String) -> String {
-        return CFLocaleCreateCanonicalLanguageIdentifierFromString(kCFAllocatorSystemDefault, string._cfObject)._swiftObject
+    public class func localeIdentifier(fromWindowsLocaleCode lcid: UInt32) -> String? {
+        Locale.identifier(fromWindowsLocaleCode: Int(lcid))
     }
     
-    open class func localeIdentifier(fromWindowsLocaleCode lcid: UInt32) -> String? {
-        return CFLocaleCreateLocaleIdentifierFromWindowsLocaleCode(kCFAllocatorSystemDefault, lcid)._swiftObject
+    public class func windowsLocaleCode(fromLocaleIdentifier localeIdentifier: String) -> UInt32 {
+        if let code = Locale.windowsLocaleCode(fromIdentifier: localeIdentifier) {
+            return UInt32(code)
+        } else {
+            return UInt32.max
+        }
     }
     
-    open class func windowsLocaleCode(fromLocaleIdentifier localeIdentifier: String) -> UInt32 {
-        return CFLocaleGetWindowsLocaleCodeFromLocaleIdentifier(localeIdentifier._cfObject)
+    public class func characterDirection(forLanguage isoLangCode: String) -> NSLocale.LanguageDirection {
+        let language = Locale.Language(components: .init(identifier: isoLangCode))
+        return language.characterDirection
     }
     
-    open class func characterDirection(forLanguage isoLangCode: String) -> NSLocale.LanguageDirection {
-        let dir = CFLocaleGetLanguageCharacterDirection(isoLangCode._cfObject)
-        return NSLocale.LanguageDirection(rawValue: UInt(dir.rawValue))!
-    }
-    
-    open class func lineDirection(forLanguage isoLangCode: String) -> NSLocale.LanguageDirection {
-        let dir = CFLocaleGetLanguageLineDirection(isoLangCode._cfObject)
-        return NSLocale.LanguageDirection(rawValue: UInt(dir.rawValue))!
+    public class func lineDirection(forLanguage isoLangCode: String) -> NSLocale.LanguageDirection {
+        let language = Locale.Language(components: .init(identifier: isoLangCode))
+        return language.lineLayoutDirection
     }
 }
 
 extension NSLocale {
 
-    public struct Key : RawRepresentable, Equatable, Hashable {
-        public private(set) var rawValue: String
+    public struct Key : RawRepresentable, Equatable, Hashable, Sendable {
+        public let rawValue: String
         public init(rawValue: String) {
             self.rawValue = rawValue
         }
@@ -189,13 +371,7 @@ extension NSLocale {
         public static let alternateQuotationEndDelimiterKey = NSLocale.Key(rawValue: "kCFLocaleAlternateQuotationEndDelimiterKey")
     }
     
-    public enum LanguageDirection : UInt {
-        case unknown
-        case leftToRight
-        case rightToLeft
-        case topToBottom
-        case bottomToTop
-    }
+    public typealias LanguageDirection = Locale.LanguageDirection
 }
 
 
@@ -205,22 +381,56 @@ extension NSLocale {
 }
 #endif
 
+// MARK: - Deprecated Locale API
+
+extension Locale {
+    /// Returns a list of available `Locale` language codes.
+    @available(*, deprecated, message: "Use `Locale.LanguageCode.isoLanguageCodes` instead")
+    public static var isoLanguageCodes: [String] {
+        NSLocale.isoLanguageCodes
+    }
+
+    /// Returns a dictionary that splits an identifier into its component pieces.
+    @available(*, deprecated, message: "Use `Locale.Components(identifier:)` to access components")
+    public static func components(fromIdentifier string: String) -> [String : String] {
+        NSLocale.components(fromLocaleIdentifier: string)
+    }
+
+    /// Returns a list of available `Locale` region codes.
+    @available(*, deprecated, message: "Use `Locale.Region.isoRegions` instead")
+    public static var isoRegionCodes: [String] {
+        NSLocale.isoCountryCodes
+    }
+
+    /// Returns a list of available `Locale` currency codes.
+    @available(*, deprecated, message: "Use `Locale.Currency.isoCurrencies` instead")
+    public static var isoCurrencyCodes: [String] {
+        NSLocale.isoCurrencyCodes
+    }
+
+    /// Returns the character direction for a specified language code.
+    @available(*, deprecated, message: "Use `Locale.Language(identifier:).characterDirection`")
+    public static func characterDirection(forLanguage isoLangCode: String) -> Locale.LanguageDirection {
+        NSLocale.characterDirection(forLanguage: isoLangCode)
+    }
+
+    /// Returns the line direction for a specified language code.
+    @available(*, deprecated, message: "Use `Locale.Language(identifier:).lineLayoutDirection`")
+    public static func lineDirection(forLanguage isoLangCode: String) -> Locale.LanguageDirection {
+        NSLocale.lineDirection(forLanguage: isoLangCode)
+    }
+}
+
+// MARK: - CF Conversions
 
 extension CFLocale : _NSBridgeable, _SwiftBridgeable {
     typealias NSType = NSLocale
     typealias SwiftType = Locale
     internal var _nsObject: NSLocale {
-        return unsafeBitCast(self, to: NSType.self)
+        return NSLocale(localeIdentifier: CFLocaleGetIdentifier(self)._swiftObject)
     }
     internal var _swiftObject: Locale {
         return _nsObject._swiftObject
-    }
-}
-
-extension NSLocale : _SwiftBridgeable {
-    typealias SwiftType = Locale
-    internal var _swiftObject: Locale {
-        return Locale(reference: self)
     }
 }
 
@@ -231,10 +441,53 @@ extension Locale {
     }
 }
 
+extension NSLocale {
+    internal var _cfObject: CFLocale {
+        CFLocaleCreate(nil, self.localeIdentifier._cfObject)
+    }
+}
+
+// MARK: - Swift Conversions
+
+extension NSLocale : _SwiftBridgeable {
+    typealias SwiftType = Locale
+    internal var _swiftObject: Locale {
+        return _locale
+    }
+}
+
 extension NSLocale : _StructTypeBridgeable {
     public typealias _StructType = Locale
     
     public func _bridgeToSwift() -> Locale {
         return Locale._unconditionallyBridgeFromObjectiveC(self)
+    }
+}
+
+extension Locale : _ObjectiveCBridgeable {
+    public static func _isBridgedToObjectiveC() -> Bool {
+        return true
+    }
+    
+    @_semantics("convertToObjectiveC")
+    public func _bridgeToObjectiveC() -> NSLocale {
+        return NSLocale(locale: self)
+    }
+    
+    public static func _forceBridgeFromObjectiveC(_ input: NSLocale, result: inout Locale?) {
+        if !_conditionallyBridgeFromObjectiveC(input, result: &result) {
+            fatalError("Unable to bridge \(NSLocale.self) to \(self)")
+        }
+    }
+    
+    public static func _conditionallyBridgeFromObjectiveC(_ input: NSLocale, result: inout Locale?) -> Bool {
+        result = input._locale
+        return true
+    }
+    
+    public static func _unconditionallyBridgeFromObjectiveC(_ source: NSLocale?) -> Locale {
+        var result: Locale? = nil
+        _forceBridgeFromObjectiveC(source!, result: &result)
+        return result!
     }
 }

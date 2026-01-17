@@ -84,6 +84,9 @@ extension NSObjectProtocol {
     }
 }
 
+@available(*, unavailable)
+extension NSZone : @unchecked Sendable { }
+
 public struct NSZone : ExpressibleByNilLiteral {
     
     public init() {
@@ -149,8 +152,9 @@ extension NSMutableCopying {
 }
 
 /// The root class of most Foundation class hierarchies.
+//@_nonSendable - TODO: Mark with attribute to indicate this pure abstract class defers Sendable annotation to its subclasses.
 open class NSObject : NSObjectProtocol, Equatable, Hashable {
-    // Important: add no ivars here. It will subvert the careful layout of subclasses that bridge into CF.    
+    // Important: add no ivars here. It will subvert the careful layout of subclasses that bridge into CF.
     
     /// Implemented by subclasses to initialize a new object immediately after memory
     /// for it has been allocated.
@@ -245,7 +249,7 @@ open class NSObject : NSObjectProtocol, Equatable, Hashable {
         return 0
     }
     
-    // TODO: move these back into extensions once extension methods can be overriden
+    // TODO: move these back into extensions once extension methods can be overridden
     
     /// Overridden by subclasses to substitute a class other than its own during coding.
     ///

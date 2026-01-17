@@ -10,12 +10,11 @@
 //import libxml2
 #if os(macOS) || os(iOS) || os(watchOS) || os(tvOS)
 import SwiftFoundation
-import CFXMLInterface
+import _CFXMLInterface
 #else
 import Foundation
-@_implementationOnly import CFXMLInterface
+@_implementationOnly import _CFXMLInterface
 #endif
-@_implementationOnly import CoreFoundation
 
 // initWithKind options
 //  NSXMLNodeOptionsNone
@@ -33,6 +32,8 @@ import Foundation
 // Output options
 //  NSXMLNodePrettyPrint
 
+@available(*, unavailable)
+extension XMLNode : @unchecked Sendable { }
 
 /*!
  @class NSXMLNode
@@ -40,7 +41,7 @@ import Foundation
  */
 open class XMLNode: NSObject, NSCopying {
     
-    public enum Kind : UInt {
+    public enum Kind : UInt, Sendable {
         case invalid
         case document
         case element
@@ -56,7 +57,7 @@ open class XMLNode: NSObject, NSCopying {
         case notationDeclaration
     }
     
-    public struct Options : OptionSet {
+    public struct Options : OptionSet, Sendable {
         public let rawValue : UInt
         public init(rawValue: UInt) { self.rawValue = rawValue }
         
@@ -356,6 +357,8 @@ open class XMLNode: NSObject, NSCopying {
                 _CFXMLNodeForceSetName(_xmlNode, newValue)
             case .namespace:
                 _CFXMLNamespaceSetPrefix(_xmlNode, newValue, Int64(newValue?.utf8.count ?? 0))
+            case .DTDKind:
+                _CFXMLNodeForceSetName(_xmlNode, newValue)
             default:
                 if let newName = newValue {
                     _CFXMLNodeSetName(_xmlNode, newName)
@@ -408,7 +411,7 @@ open class XMLNode: NSObject, NSCopying {
                 return returned == nil ? nil : unsafeBitCast(returned!, to: NSString.self) as String
                 
             case .element:
-                // As with Darwin, children's string values are just concanated without spaces.
+                // As with Darwin, children's string values are just concatenated without spaces.
                 return children?.compactMap({ $0.stringValue }).joined() ?? ""
                 
             default:
@@ -753,16 +756,16 @@ open class XMLNode: NSObject, NSCopying {
         node.objectValue = value
         return node
     }
-    private static let _defaultNamespaces: [XMLNode] = [
+    private static nonisolated(unsafe) let _defaultNamespaces: [XMLNode] = [
         XMLNode.defaultNamespace(prefix: "xml", value: "http://www.w3.org/XML/1998/namespace"),
         XMLNode.defaultNamespace(prefix: "xml", value: "http://www.w3.org/2001/XMLSchema"),
         XMLNode.defaultNamespace(prefix: "xml", value: "http://www.w3.org/2001/XMLSchema-instance"),
     ]
     
-    internal static let _defaultNamespacesByPrefix: [String: XMLNode] =
+    internal static nonisolated(unsafe) let _defaultNamespacesByPrefix: [String: XMLNode] =
         Dictionary(XMLNode._defaultNamespaces.map { ($0.name!, $0) }, uniquingKeysWith: { old, _ in old })
 
-    internal static let _defaultNamespacesByURI: [String: XMLNode] =
+    internal static nonisolated(unsafe) let _defaultNamespacesByURI: [String: XMLNode] =
         Dictionary(XMLNode._defaultNamespaces.map { ($0.stringValue!, $0) }, uniquingKeysWith: { old, _ in old })
 
     open class func predefinedNamespace(forPrefix name: String) -> XMLNode? {
@@ -1024,6 +1027,9 @@ open class XMLNode: NSObject, NSCopying {
 }
 
 internal protocol _NSXMLNodeCollectionType: Collection { }
+
+@available(*, unavailable)
+extension XMLNode.Index : Sendable { }
 
 extension XMLNode: _NSXMLNodeCollectionType {
     

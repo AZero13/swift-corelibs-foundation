@@ -133,12 +133,7 @@ public func NSGetSizeAndAlignment(_ typePtr: UnsafePointer<Int8>,
     return typePtr.advanced(by: 1)
 }
 
-public enum ComparisonResult : Int {
-    
-    case orderedAscending = -1
-    case orderedSame
-    case orderedDescending
-    
+extension ComparisonResult {
     internal static func _fromCF(_ val: CFComparisonResult) -> ComparisonResult {
         if val == kCFCompareLessThan {
             return .orderedAscending
@@ -151,7 +146,7 @@ public enum ComparisonResult : Int {
 }
 
 /* Note: QualityOfService enum is available on all platforms, but it may not be implemented on all platforms. */
-public enum QualityOfService : Int {
+public enum QualityOfService : Int, Sendable {
     
     /* UserInteractive QoS is used for work directly involved in providing an interactive UI such as processing events or drawing to the screen. */
     case userInteractive
@@ -169,7 +164,7 @@ public enum QualityOfService : Int {
     case `default`
 }
 
-public struct NSSortOptions: OptionSet {
+public struct NSSortOptions: OptionSet, Sendable {
     public let rawValue : UInt
     public init(rawValue: UInt) { self.rawValue = rawValue }
     
@@ -177,7 +172,7 @@ public struct NSSortOptions: OptionSet {
     public static let stable = NSSortOptions(rawValue: UInt(1 << 4))
 }
 
-public struct NSEnumerationOptions: OptionSet {
+public struct NSEnumerationOptions: OptionSet, Sendable {
     public let rawValue : UInt
     public init(rawValue: UInt) { self.rawValue = rawValue }
     
@@ -190,7 +185,7 @@ public typealias Comparator = (Any, Any) -> ComparisonResult
 public let NSNotFound: Int = Int.max
 
 internal func NSRequiresConcreteImplementation(_ fn: String = #function, file: StaticString = #file, line: UInt = #line) -> Never {
-    fatalError("\(fn) must be overriden in subclass implementations", file: file, line: line)
+    fatalError("\(fn) must be overridden in subclass implementations", file: file, line: line)
 }
 
 internal func NSUnimplemented(_ fn: String = #function, file: StaticString = #file, line: UInt = #line) -> Never {
@@ -264,7 +259,6 @@ internal let _NSClassesRenamedByObjCAPINotes: [(class: AnyClass, objCName: Strin
         (ProcessInfo.self, "NSProcessInfo"),
         (Port.self, "NSPort"),
         (PortMessage.self, "NSPortMessage"),
-        (SocketPort.self, "NSSocketPort"),
         (Bundle.self, "NSBundle"),
         (ByteCountFormatter.self, "NSByteCountFormatter"),
         (Host.self, "NSHost"),
@@ -279,20 +273,14 @@ internal let _NSClassesRenamedByObjCAPINotes: [(class: AnyClass, objCName: Strin
         (JSONSerialization.self, "NSJSONSerialization"),
         (LengthFormatter.self, "NSLengthFormatter"),
         (MassFormatter.self, "NSMassFormatter"),
-        (NotificationQueue.self, "NSNotificationQueue"),
         (NumberFormatter.self, "NSNumberFormatter"),
-        (Operation.self, "NSOperation"),
-        (OperationQueue.self, "NSOperationQueue"),
         (OutputStream.self, "NSOutputStream"),
-        (PersonNameComponentsFormatter.self, "NSPersonNameComponentsFormatter"),
+        // This type is deprecated and unavailable in SCL-F.
+        //(PersonNameComponentsFormatter.self, "NSPersonNameComponentsFormatter"),
         (Pipe.self, "NSPipe"),
-        (Progress.self, "NSProgress"),
         (PropertyListSerialization.self, "NSPropertyListSerialization"),
-        (RunLoop.self, "NSRunLoop"),
         (Scanner.self, "NSScanner"),
         (Stream.self, "NSStream"),
-        (Thread.self, "NSThread"),
-        (Timer.self, "NSTimer"),
         (UserDefaults.self, "NSUserDefaults"),
         (FileManager.DirectoryEnumerator.self, "NSDirectoryEnumerator"),
         (Dimension.self, "NSDimension"),
@@ -322,13 +310,25 @@ internal let _NSClassesRenamedByObjCAPINotes: [(class: AnyClass, objCName: Strin
         (UnitVolume.self, "NSUnitVolume"),
         (UnitTemperature.self, "NSUnitTemperature"),
     ]
-#if !(os(iOS) || os(Android))
+#if !(os(iOS) || os(Android) || os(WASI))
     map.append((Process.self, "NSTask"))
+#endif
+#if !os(WASI)
+    map += [
+        (NotificationQueue.self, "NSNotificationQueue"),
+        (Operation.self, "NSOperation"),
+        (OperationQueue.self, "NSOperationQueue"),
+        (SocketPort.self, "NSSocketPort"),
+        (Progress.self, "NSProgress"),
+        (RunLoop.self, "NSRunLoop"),
+        (Thread.self, "NSThread"),
+        (Timer.self, "NSTimer"),
+    ]
 #endif
     return map
 }()
 
-fileprivate var mapFromObjCNameToKnownName: [String: String] = {
+fileprivate let mapFromObjCNameToKnownName: [String: String] = {
     var map: [String: String] = [:]
     for entry in _NSClassesRenamedByObjCAPINotesInNetworkingOrXML {
         map[entry.objCName] = entry.swiftName
@@ -336,7 +336,7 @@ fileprivate var mapFromObjCNameToKnownName: [String: String] = {
     return map
 }()
 
-fileprivate var mapFromKnownNameToObjCName: [String: String] = {
+fileprivate let mapFromKnownNameToObjCName: [String: String] = {
     var map: [String: String] = [:]
     for entry in _NSClassesRenamedByObjCAPINotesInNetworkingOrXML {
         map[entry.swiftName] = entry.objCName
@@ -344,7 +344,7 @@ fileprivate var mapFromKnownNameToObjCName: [String: String] = {
     return map
 }()
 
-fileprivate var mapFromObjCNameToClass: [String: AnyClass] = {
+fileprivate let mapFromObjCNameToClass: [String: AnyClass] = {
     var map: [String: AnyClass] = [:]
     for entry in _NSClassesRenamedByObjCAPINotes {
         map[entry.objCName] = entry.class
@@ -352,7 +352,7 @@ fileprivate var mapFromObjCNameToClass: [String: AnyClass] = {
     return map
 }()
 
-fileprivate var mapFromSwiftClassNameToObjCName: [String: String] = {
+fileprivate let mapFromSwiftClassNameToObjCName: [String: String] = {
     var map: [String: String] = [:]
     for entry in _NSClassesRenamedByObjCAPINotes {
         map[String(reflecting: entry.class)] = entry.objCName

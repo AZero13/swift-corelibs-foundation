@@ -7,8 +7,12 @@
 // See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 
+#if canImport(Android)
+@preconcurrency import Android
+#endif
+
 @frozen
-public struct CGFloat {
+public struct CGFloat: Sendable {
 #if arch(i386) || arch(arm) || arch(wasm32)
     /// The native type used to store the CGFloat, which is Float on
     /// 32-bit architectures and Double on 64-bit architectures.

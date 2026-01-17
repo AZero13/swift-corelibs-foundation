@@ -817,14 +817,24 @@ void _CFArraySetCapacity(CFMutableArrayRef array, CFIndex cap) {
 	    deque->_leftIdx = capacity / 2; 
 	} else {
 	    struct __CFArrayDeque *olddeque = deque;
-	    CFIndex oldcap = deque->_capacity;
+	    CFIndex oldLeftIdx = deque->_leftIdx;
+	    CFIndex count = __CFArrayGetCount(array);
+	    CFIndex newLeftIdx = oldLeftIdx;
 	    deque = (struct __CFArrayDeque *)CFAllocatorAllocate(allocator, size, 0);
 	    if (NULL == deque) __CFArrayHandleOutOfMemory(array, size);
-	    memmove(deque, olddeque, sizeof(struct __CFArrayDeque) + oldcap * sizeof(struct __CFArrayBucket));
+	    deque->_capacity = capacity;
+	    if (newLeftIdx + count > capacity) {
+		newLeftIdx = (capacity - count) / 2;
+	    }
+	    deque->_leftIdx = newLeftIdx;
+	    if (0 < count) {
+		struct __CFArrayBucket *oldBuckets = (struct __CFArrayBucket *)((uint8_t *)olddeque + sizeof(struct __CFArrayDeque));
+		struct __CFArrayBucket *newBuckets = (struct __CFArrayBucket *)((uint8_t *)deque + sizeof(struct __CFArrayDeque));
+		memmove(newBuckets + newLeftIdx, oldBuckets + oldLeftIdx, count * sizeof(struct __CFArrayBucket));
+	    }
 	    CFAllocatorDeallocate(allocator, olddeque);
 	    if (__CFOASafe) __CFSetLastAllocationEventName(deque, "CFArray (store-deque)");
 	}
-	deque->_capacity = capacity;
         array->_store = deque;
     }
     END_MUTATION(array);

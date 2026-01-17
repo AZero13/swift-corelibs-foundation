@@ -33,7 +33,9 @@ enum {
 
 CF_INLINE CFIndex __CFArrayDequeRoundUpCapacity(CFIndex capacity) {
     if (capacity < 4) return 4;
-    return __CFMin((1 << flsl(capacity)), __CF_MAX_BUCKETS_PER_DEQUE);
+    CFIndex shift = flsl(capacity);
+    if (shift >= (CFIndex)(8 * sizeof(unsigned long))) return __CF_MAX_BUCKETS_PER_DEQUE;
+    return __CFMin((CFIndex)(1UL << shift), __CF_MAX_BUCKETS_PER_DEQUE);
 }
 
 struct __CFArrayDeque {

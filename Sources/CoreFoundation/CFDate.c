@@ -172,7 +172,7 @@ CF_PRIVATE void __CFDateInitialize(void) {
     if (clock_getres(CLOCK_MONOTONIC, &res) != 0) {
         HALT;
     }
-    __CFTSRRate = res.tv_sec + (1000000000 * res.tv_nsec);
+    __CFTSRRate = (double)res.tv_sec + ((double)res.tv_nsec / 1.0e9);
     __CF1_TSRRate = 1.0 / __CFTSRRate;
 #else
 #error Unable to initialize date

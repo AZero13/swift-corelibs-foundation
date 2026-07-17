@@ -307,10 +307,12 @@ CF_PRIVATE CFMutableArrayRef _CFCreateContentsOfDirectory(CFAllocatorRef alloc, 
                     int moreDots = 0;
                     while ((temp = wcschr(temp, '.'))) {
                         if (++moreDots == extBuffInteriorDotCount) break;
+                        temp++;
                     }
                     if (moreDots == extBuffInteriorDotCount) {
                         fileExt = save;
                     }
+                    if (!fileExt) save++;
                 }
             }
 	    
@@ -422,10 +424,12 @@ CF_PRIVATE CFMutableArrayRef _CFCreateContentsOfDirectory(CFAllocatorRef alloc, 
                     int moreDots = 0;
                     while ((temp = strchr(temp, '.'))) {
                         if (++moreDots == extBuffInteriorDotCount) break;
+                        temp++;
                     }
                     if (moreDots == extBuffInteriorDotCount) {
                         fileExt = save;
                     }
+                    if (!fileExt) save++;
                 }
             }
 	    
